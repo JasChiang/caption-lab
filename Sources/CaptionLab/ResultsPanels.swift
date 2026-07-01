@@ -13,6 +13,7 @@ struct ResultsPanels: View {
                     Spacer()
                     StageDots(stages: clip.stages)
                 }
+                audioQuality(clip)
                 cutSummary(clip)
                 qwenCard(clip)
                 contentMap(clip)
@@ -23,6 +24,30 @@ struct ResultsPanels: View {
         } else {
             Text("Add a clip and run the pipeline to see results.")
                 .font(Theme.ui(12)).foregroundStyle(Theme.faint).panelCard()
+        }
+    }
+
+    // MARK: Audio quality (raw source)
+
+    private func audioQuality(_ clip: ClipModel) -> some View {
+        card("AUDIO QUALITY (raw source)") {
+            if let q = clip.audioQuality {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack {
+                        pill(String(format: "SNR ~%.0f dB", q.snrDb), q.snrDb < 12 ? Theme.cut : Theme.pass)
+                        pill(String(format: "clip %.1f%%", q.clippingFraction * 100), q.clippingFraction > 0.002 ? Theme.fail : Theme.dim)
+                        Spacer()
+                    }
+                    if q.warnings.isEmpty {
+                        Text("Clean source — no clipping or noisy/music bed detected.")
+                            .font(Theme.ui(11)).foregroundStyle(Theme.faint)
+                    } else {
+                        ForEach(Array(q.warnings.enumerated()), id: \.offset) { _, w in
+                            Text("⚠︎ \(w)").font(Theme.ui(11)).foregroundStyle(Theme.cut)
+                        }
+                    }
+                }
+            } else { empty("not analyzed yet") }
         }
     }
 

@@ -51,12 +51,24 @@ enum TranscriptCorrector {
         repeat to match it — keep every 去去去 / 進進 from the line. Swap a word only where line and REFERENCE \
         clearly describe the same syllable(s); never import extra wording the line does not support.
         """
+        // Code-switching is a distinct failure mode for a single-locale (zh-TW) recognizer: it emits an
+        // English word as ONE often-garbled Latin token (or drops it), and sometimes writes a spoken English
+        // word as same-sounding Chinese characters (or the reverse). Call it out explicitly so the corrector
+        // repairs the English rather than "fixing" it into plausible Chinese.
+        let codeSwitchRule = """
+         This speech mixes Mandarin and English (code-switching). Keep English words as ENGLISH and Chinese \
+        as Chinese — never convert a spoken English word into same-sounding Chinese characters or vice versa \
+        (e.g. don't turn a spoken "focus" into 佛克斯, or 六 into "leo"). Repair a mangled/garbled English \
+        token back to its correct spelling and casing whenever context makes the intended word clear (the \
+        recognizer emits English as a single, often-corrupted token), but only when you're confident of the \
+        word — never invent English that wasn't said.
+        """
         let system = """
         You clean up raw speech-to-text transcripts. For each numbered line, fix whatever the \
         recognizer got wrong, using context: characters or words it misheard — including \
         same-sounding (homophone / soundalike) substitutions in ANY language, which are especially common \
         in Chinese (e.g. 試用→使用, 帳號 not 賬號; English their/there) — plus misspellings, wrong word \
-        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(glossaryRule)\(referenceRule) Add natural punctuation, \
+        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(codeSwitchRule)\(glossaryRule)\(referenceRule) Add natural punctuation, \
         using the language's OWN quotation marks (Chinese / Japanese 「…」 with 『…』 nested; never ASCII ' or "), \
         so a caption never strands a stray quote. Do NOT \
         paraphrase, rewrite, translate, summarize, reorder, or change the speaker's wording or meaning \

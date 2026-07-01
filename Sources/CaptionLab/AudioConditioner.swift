@@ -270,7 +270,8 @@ enum AudioConditioner {
 
     // MARK: - IO helpers
 
-    private static func readMonoFloats(url: URL) async throws -> [Float] {
+    /// Decode a file's first audio track to a flat 16 kHz mono float array. Shared with `AudioQuality`.
+    static func readMonoFloats(url: URL) async throws -> [Float] {
         var out: [Float] = []
         try await AudioTrackReader.read(from: url, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,

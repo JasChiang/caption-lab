@@ -35,6 +35,9 @@ final class ClipModel: Identifiable {
     var duration: Double = 0
     var fps: Double = 30
     var envelope: AudioEnvelope?
+    /// Raw-source quality analysis (clipping / SNR) — computed on add, surfaced as warnings.
+    var audioQuality: AudioQuality.Report?
+    var audioWarnings: [String] { audioQuality?.warnings ?? [] }
 
     // Per-clip stage progress
     var stages: [PipelineStage] = makeStages()
@@ -234,6 +237,7 @@ final class PipelineViewModel {
             clip.fps = Double(rate)
         } else { clip.fps = 30 }
         clip.envelope = try? await AudioEnvelopeExtractor.extract(from: clip.url)
+        clip.audioQuality = await AudioQuality.analyze(url: clip.url)
     }
 
     // MARK: - Composition (joined, seekable; raw or cuts-applied)

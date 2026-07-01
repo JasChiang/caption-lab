@@ -4,6 +4,41 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-01 (c) — signal-quality warnings + code-switching
+
+Branch: `claude/fast-speech-transcription-7zyzzn`.
+
+Follow-up covering the remaining speech pathologies. The honest split: what a system-frameworks-only build
+can genuinely FIX, what it can only reliably DETECT, and what needs an ML model we don't ship.
+
+### New: `AudioQuality.swift` — always-on raw-source analysis (detect, don't fake)
+Runs on the RAW audio (before conditioning) and surfaces warnings; fixes nothing it can't honestly fix.
+- **Clipping / 爆音** — counts samples pinned near full scale (|x| ≥ 0.98). Clipped audio is irreversibly
+  distorted, so we WARN (>0.2%) rather than pretend to repair it.
+- **Low SNR / noisy or music bed** — RMS-envelope percentile ratio (speech p90 / floor p10). Below ~12 dB →
+  warn. True source separation needs a trained model (out of scope), so this is detection-only.
+- Deliberately NOT faked: **reverb** dereverb and **overlapping-speaker** separation need trained models; a
+  cheap heuristic would mostly false-positive, so they're omitted (overlap is still LABELLED by the existing
+  Gemini content-map diarization — labelling ≠ separation).
+- Surfaced in: GUI "AUDIO QUALITY (raw source)" card (`ResultsPanels`), CLI stage-2 print, computed on clip
+  add (`loadMeta` → `clip.audioQuality`).
+
+### Code-switching (中英夾雜) — `TranscriptCorrector`
+Added an explicit `codeSwitchRule` to the correction system prompt: the single-locale (zh-TW) recognizer
+emits English as one often-garbled Latin token (or drops it) and sometimes writes spoken English as
+same-sounding Chinese. The rule tells the corrector to keep English as English, repair a mangled English
+token to correct spelling/casing when context is clear, and never transliterate one language into the other.
+(Prompt-level fix — pairs with the content-map REFERENCE and the retranscribe stage that already recover the
+harder cases.)
+
+### Open / next steps
+- **Untested — needs a Mac build.** Watch the CLI `audio quality:` line + `⚠︎` warnings on a clipped clip and
+  a music-bed clip; check the code-switch rule on `評測頻道D`/`財經節目E` (code-switch clips) doesn't over-correct clean
+  English. Tune `clipWarnFraction` (0.2%), `lowSNRWarnDb` (12).
+- Overlap/reverb/music separation remain genuine ML gaps — revisit only if a separation model is in scope.
+
+---
+
 ## Session 2026-07-01 (b) — pre-ASR audio conditioning (fast & quiet speech)
 
 Branch: `claude/fast-speech-transcription-7zyzzn` (off `main`).
