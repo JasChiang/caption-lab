@@ -96,6 +96,17 @@ Branch: `caption-pipeline-improvements` (off `main`).
   stutters preserved, timing drift 0. Prompt example was genericised (反應/反映) to avoid anchoring.
 
 ### Open / next steps
+- **Clearer progress (NEXT — user's priority for tomorrow)**: stages currently show only a binary
+  `running`/`done` (`StageState`), so the slow Content-map stage (Gemini watching the whole clip, 30 s–2 min)
+  looks hung — no way to tell it's alive. Make it legible:
+  - Per-stage ELAPSED timer while `.running` (e.g. "Content map · 0:23…") — cheapest, immediately reassuring.
+  - A sub-status line per stage: "uploading to Gemini / waiting for response / downloading Qwen model 45%".
+    The pieces already exist — `Transcription` prints `[NOTICE] extract/transcribe…` to stdout, the Qwen
+    sidecar (`mlx_audio`) prints a model-download progress bar to stderr, and Apple `SpeechTranscriber` can
+    report progress — surface these into the GUI instead of the console.
+  - Optionally a spinner/indeterminate bar on the active stage dot in `PipelineStage`/`ResultsPanels`.
+  - Wire point: `StageState`/`PipelineStage` (PipelineViewModel.swift) drive the stage dots; add an elapsed
+    timestamp + optional `detail: String` and render it in the CLIP stage view.
 - **Long-term overfit watch**: the "prefer the map" rule COULD trade an ASR-correct word for a map-wrong one.
   2 clips showed only improvements, but validate on more, varied clips; consider logging map-swap accuracy.
 - **Tighten inserted-word timing**: recovered insertions (HDMI 2.1) are placed on energy peaks within the
