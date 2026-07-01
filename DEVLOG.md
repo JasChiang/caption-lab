@@ -4,6 +4,57 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-01 (b) — pre-ASR audio conditioning (fast & quiet speech)
+
+Branch: `claude/fast-speech-transcription-7zyzzn` (off `main`).
+
+### Problem
+Fast talkers and quiet/fading talkers wreck the transcript in two *different* ways, so they need two
+*different* fixes — both applied to the audio BEFORE recognition:
+- **Fast** → the recognizer (fixed frame rate) swallows run-together syllables (整年檢壓 for 正念減壓).
+- **Quiet / fading** → whole utterance under the recognizer's floor, and the sentence-final particles
+  (的/了/嗎) trail off below the VAD threshold and get dropped entirely.
+
+### What changed
+New `AudioConditioner.swift` — a single offline pass over the extracted 16 kHz mono audio:
+1. **Denoise** (opt-in, default OFF): one-pole ~85 Hz high-pass + gentle downward expander below -45 dBFS.
+2. **Normalize + compress** (default ON, near-zero risk): attack/release envelope-follower compressor pulls
+   peaks down so makeup gain lifts the whole utterance — the fading tail comes up without the peaks clipping.
+   Makeup gain capped at +24 dB so a noise-only clip isn't blown up.
+3. **Adaptive slow-down** (default ON): estimates syllable rate from RMS energy peaks (1 CJK syllable ≈ 1
+   nucleus peak — no ASR needed), and when it exceeds ~6.5 syl/s time-stretches the audio SLOWER (pitch
+   preserved, `AVAudioUnitTimePitch` offline) so each syllable gets more frames. Rate scales inversely with
+   speed, clamped to [0.6×, 0.9×]. Normal-paced clips are untouched (rate = 1.0).
+
+`timeScale` maps recognizer timings back onto the source clock (`decodeResults` multiplies by it) — a word at
+conditioned-time *t* sits at source-time *t·rate*. The Gemini **retranscribe** span (stage 5) is conditioned
+too (normalize + forced slow-down): only its TEXT is used and timing comes from ORIGINAL-clock energy peaks,
+so the slow-down needs zero time mapping there.
+
+Conditioning is **pure upside** — any failure (unreadable track, engine error) returns nil and the pipeline
+analyzes the untouched extract. Stage-7 timing-preservation invariant is unaffected (both sides use the same
+scaled-back `asr.words`).
+
+### Wiring
+- `Transcription.transcribe/transcribeVideoAudio` take `conditioning: AudioConditioning` (defaults on).
+- `CaptionPipeline.retranscribeSuspectSpans` takes it too; span → WAV (int16) → Gemini `audio/wav`.
+- GUI: new "AUDIO CONDITIONING (pre-ASR)" toggles in `ControlsPanel` (`vm.conditioning`).
+- CLI: `--no-normalize`, `--no-slow-fast`, `--denoise`.
+
+### Open / next steps
+- **Untested — needs a Mac build** (this session was authored on Linux; no Apple toolchain). Build with
+  `swift build`, then A/B on the fast clip (`finance_財經節目E`) and a quiet clip: compare dropped-syllable count
+  and tail-particle survival with conditioning on/off. Watch the `[NOTICE] conditioned audio …` log line for
+  the measured syl/s and chosen stretch rate.
+- **Verify SpeechAnalyzer accepts the conditioned int16 CAF** (same format as the original extract, so it
+  should — but confirm on first run).
+- **Tune thresholds** on real clips: `fastSyllablesPerSecond` (6.5), stretch clamp [0.6, 0.9], compressor
+  threshold/ratio (-24 dB, 3:1), gate threshold (-45 dB).
+- **Other speech pathologies not yet handled** (surfaced for the user): code-switching / 中英夾雜 (single
+  `zh-TW` locale mangles English — the content-map reference partly covers it), overlapping speakers,
+  clipping/爆音 (already-clipped samples can't be normalized back — could detect + warn), room reverb
+  (smears syllables AND energy peaks), background music.
+
 ## Session 2026-07-01 — beta build fix, cut precision, speaker diarization, map-referenced correction
 
 Branch: `caption-pipeline-improvements` (off `main`).

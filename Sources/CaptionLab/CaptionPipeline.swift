@@ -68,7 +68,8 @@ enum CaptionPipeline {
     /// untuned — gated behind the caller's opt-in.
     static func retranscribeSuspectSpans(
         result res: TranscriptionResult, url: URL, contentSegments mapSegs: [ContentSegment],
-        spanCache retranscribeSpanCache: inout [String: String]
+        spanCache retranscribeSpanCache: inout [String: String],
+        conditioning: AudioConditioning = AudioConditioning()
     ) async -> (result: TranscriptionResult, retranscribes: [Retranscribe]) {
         var captionRetranscribes: [Retranscribe] = []
         guard hasGeminiKey else { return (res, captionRetranscribes) }
@@ -93,9 +94,24 @@ enum CaptionPipeline {
             if let cached = retranscribeSpanCache[spanKey] {
                 clean = cached
             } else {
-                guard let span = await extractSpanM4A(from: url, start: s.seg.start, end: s.seg.end),
-                      let verbatim = try? await GeminiClient.transcribeAudio(fileURL: span, biasHint: s.hint) else { continue }
-                try? FileManager.default.removeItem(at: span)
+                guard let span = await extractSpanM4A(from: url, start: s.seg.start, end: s.seg.end) else { continue }
+                // Condition the suspect span before re-transcribing: normalize (quiet audio) and force a
+                // slow-down (this span is already flagged as garbled — likely a fast run). We only keep the
+                // TEXT; the span's word timings are placed on the ORIGINAL-clock energy peaks below, so the
+                // slow-down needs no time mapping. Falls back to the raw m4a if conditioning fails.
+                var spanURL = span
+                var spanMIME = "audio/mp4"
+                if !conditioning.isNoop,
+                   let cond = await AudioConditioner.condition(url: span, options: conditioning,
+                                                               forceStretch: conditioning.slowFastSpeech, container: .wav) {
+                    try? FileManager.default.removeItem(at: span)
+                    spanURL = cond.url
+                    spanMIME = AudioConditioner.Container.wav.mimeType
+                }
+                guard let verbatim = try? await GeminiClient.transcribeAudio(fileURL: spanURL, mimeType: spanMIME, biasHint: s.hint) else {
+                    try? FileManager.default.removeItem(at: spanURL); continue
+                }
+                try? FileManager.default.removeItem(at: spanURL)
                 clean = verbatim.trimmingCharacters(in: .whitespacesAndNewlines)
                 retranscribeSpanCache[spanKey] = clean
             }

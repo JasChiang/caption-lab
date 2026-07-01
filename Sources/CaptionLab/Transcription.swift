@@ -10,10 +10,10 @@ enum Transcription {
     // short enough that a true XPC wedge fails with a clear error instead of spinning forever.
     private static let speechServiceTimeout: Duration = .seconds(60)
 
-    static func transcribeVideoAudio(videoURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil) async throws -> TranscriptionResult {
+    static func transcribeVideoAudio(videoURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil, conditioning: AudioConditioning = AudioConditioning()) async throws -> TranscriptionResult {
         let tempAudioURL = try await extractAudioTrack(from: videoURL, range: sourceRange)
         defer { try? FileManager.default.removeItem(at: tempAudioURL) }
-        let result = try await transcribe(fileURL: tempAudioURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale)
+        let result = try await transcribe(fileURL: tempAudioURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale, conditioning: conditioning)
         return result.offsetting(by: sourceRange?.lowerBound ?? 0)
     }
 
@@ -46,11 +46,11 @@ enum Transcription {
         return nil
     }
 
-    static func transcribe(fileURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil) async throws -> TranscriptionResult {
+    static func transcribe(fileURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil, conditioning: AudioConditioning = AudioConditioning()) async throws -> TranscriptionResult {
         if let sourceRange {
             let tempURL = try await extractAudioTrack(from: fileURL, range: sourceRange)
             defer { try? FileManager.default.removeItem(at: tempURL) }
-            let result = try await transcribe(fileURL: tempURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale)
+            let result = try await transcribe(fileURL: tempURL, censorProfanity: censorProfanity, preferredLocale: preferredLocale, conditioning: conditioning)
             return result.offsetting(by: sourceRange.lowerBound)
         }
 
@@ -106,9 +106,28 @@ enum Transcription {
             )
         }
 
+        // Pre-ASR conditioning: normalize/compress (quiet or fading speakers) and, when the clip is genuinely
+        // fast, time-stretch it SLOWER so the recognizer stops swallowing run-together syllables. Word/segment
+        // timings come back on the conditioned clock and are scaled by `timeScale` to land on source time.
+        // Conditioning is pure upside — any failure returns nil and we analyze the untouched extract.
+        var analysisURL = fileURL
+        var conditionedURL: URL? = nil
+        var timeScale = 1.0
+        if !conditioning.isNoop, let cond = await AudioConditioner.condition(url: fileURL, options: conditioning) {
+            analysisURL = cond.url
+            conditionedURL = cond.url
+            timeScale = cond.report.timeScale
+            Log.transcription.notice(
+                "conditioned audio \(cond.report.summary)",
+                telemetry: "Transcription audio conditioned",
+                data: ["timeScale": cond.report.timeScale, "stretched": cond.report.stretched, "syllablesPerSecond": cond.report.syllablesPerSecond]
+            )
+        }
+        defer { if let conditionedURL { try? FileManager.default.removeItem(at: conditionedURL) } }
+
         let audioFile: AVAudioFile
         do {
-            audioFile = try AVAudioFile(forReading: fileURL)
+            audioFile = try AVAudioFile(forReading: analysisURL)
         } catch {
             throw TranscriptionError.audioExtractionFailed(error.localizedDescription)
         }
@@ -145,7 +164,7 @@ enum Transcription {
             throw TranscriptionError.analysisFailed(error.localizedDescription)
         }
 
-        let decoded = decodeResults(collected, locale: locale)
+        let decoded = decodeResults(collected, locale: locale, timeScale: timeScale)
         Log.transcription.notice(
             "ok textChars=\(decoded.text.count) words=\(decoded.words.count) lang=\(decoded.language ?? "?")",
             telemetry: "Transcription finished",
@@ -244,11 +263,13 @@ enum Transcription {
     private static func decodeResults(
         _ results: [SpeechTranscriber.Result],
         locale: Locale,
+        timeScale: Double = 1,
     ) -> TranscriptionResult {
         var words: [TranscriptionWord] = []
         var segments: [TranscriptionSegment] = []
         var fullText = ""
 
+        // Timings are on the conditioned clock; scale back to source time (identity when not time-stretched).
         for result in results {
             let attributed = result.text
             fullText += String(attributed.characters)
@@ -257,8 +278,8 @@ enum Transcription {
             if !segmentText.isEmpty {
                 segments.append(TranscriptionSegment(
                     text: segmentText,
-                    start: result.range.start.seconds,
-                    end: result.range.end.seconds
+                    start: result.range.start.seconds * timeScale,
+                    end: result.range.end.seconds * timeScale
                 ))
             }
 
@@ -267,8 +288,8 @@ enum Transcription {
                 let trimmed = runText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty { continue }
                 let range = run.audioTimeRange
-                let start = range.map(\.start.seconds)
-                let end = range.map { ($0.start + $0.duration).seconds }
+                let start = range.map { $0.start.seconds * timeScale }
+                let end = range.map { ($0.start + $0.duration).seconds * timeScale }
                 words.append(TranscriptionWord(text: trimmed, start: start, end: end))
             }
         }

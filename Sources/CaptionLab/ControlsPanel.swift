@@ -25,6 +25,20 @@ struct ControlsPanel: View {
                 .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
 
             Divider().overlay(Theme.stroke)
+            sectionTitle("AUDIO CONDITIONING (pre-ASR)")
+
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Toggle("Normalize + compress (quiet / fading speakers)", isOn: $vm.conditioning.normalize)
+                    .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
+                Toggle("Slow fast speech before ASR (auto)", isOn: $vm.conditioning.slowFastSpeech)
+                    .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
+                Toggle("Denoise (high-pass + gentle gate)", isOn: $vm.conditioning.denoise)
+                    .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
+                Text("Normalize lifts a quiet talker and the trailing 的/了/嗎 a fading voice drops. Slow-down only fires when the syllable rate is genuinely fast, then maps timings back — normal-paced clips are untouched.")
+                    .font(Theme.ui(10)).foregroundStyle(Theme.faint)
+            }
+
+            Divider().overlay(Theme.stroke)
             sectionTitle("STAGE 6 — CUT STUTTERS")
 
             VStack(alignment: .leading, spacing: Theme.Space.xs) {

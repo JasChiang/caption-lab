@@ -94,6 +94,7 @@ final class PipelineViewModel {
     var aggressiveness: CutAggressiveness = .balanced
     var language = "Traditional Chinese"
     var model = GeminiClient.defaultModel
+    var conditioning = AudioConditioning()
     var alignerMode: AlignerMode = .apple
     var qwenAvailable: Bool { QwenAligner.isAvailable() }
 
@@ -378,7 +379,7 @@ final class PipelineViewModel {
 
         // [2] ASR
         clip.mark(2, .running)
-        do { clip.asr = try await Transcription.transcribeVideoAudio(videoURL: clip.url); clip.mark(2, .done) }
+        do { clip.asr = try await Transcription.transcribeVideoAudio(videoURL: clip.url, conditioning: conditioning); clip.mark(2, .done) }
         catch { clip.mark(2, .failed(error.localizedDescription)); return }
         guard let asr = clip.asr else { return }
 
@@ -406,7 +407,8 @@ final class PipelineViewModel {
             clip.mark(5, .running)
             var cache: [String: String] = [:]
             let r = await CaptionPipeline.retranscribeSuspectSpans(
-                result: corr.result, url: clip.url, contentSegments: clip.contentSegments, spanCache: &cache)
+                result: corr.result, url: clip.url, contentSegments: clip.contentSegments, spanCache: &cache,
+                conditioning: conditioning)
             working = r.result
             clip.retranscribeRows = r.retranscribes.map { RetranscribeRow(t: $0.t, from: $0.from, to: $0.to) }
             clip.mark(5, .done)

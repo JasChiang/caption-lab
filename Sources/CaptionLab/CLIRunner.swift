@@ -9,6 +9,9 @@ enum CLIRunner {
 
     Options:
       --glossary term1,term2   Extra glossary terms (merged with content-map-harvested terms).
+      --no-normalize           Disable pre-ASR normalize + compression (default: on; helps quiet speech).
+      --no-slow-fast           Disable pre-ASR auto slow-down of fast speech (default: on).
+      --denoise                Enable pre-ASR light denoise (high-pass + gentle gate; default: off).
       --no-retranscribe        Skip stage 5 (Gemini-audio re-transcription of suspect spans).
       --cut-heuristic          Use the heuristic stutter/filler detector instead of the LLM (stage 6).
       --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap; default balanced).
@@ -43,6 +46,7 @@ enum CLIRunner {
     private static func main(_ argv: [String]) async -> Int32 {
         var mediaPath: String?
         var glossaryArg: [String] = []
+        var conditioning = AudioConditioning()
         var doRetranscribe = true
         var useHeuristic = false
         var aggressiveness: CutAggressiveness = .balanced
@@ -58,6 +62,9 @@ enum CLIRunner {
             let a = args[i]
             switch a {
             case "--glossary": i += 1; if i < args.count { glossaryArg = args[i].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+            case "--no-normalize": conditioning.normalize = false
+            case "--no-slow-fast": conditioning.slowFastSpeech = false
+            case "--denoise": conditioning.denoise = true
             case "--no-retranscribe": doRetranscribe = false
             case "--cut-heuristic": useHeuristic = true
             case "--aggressiveness": i += 1; if i < args.count, let v = CutAggressiveness(rawValue: args[i]) { aggressiveness = v }
@@ -98,6 +105,7 @@ enum CLIRunner {
 
         print("CaptionLab (CLI) — \(mediaURL.lastPathComponent)")
         print("model=\(model)  retranscribe=\(doRetranscribe)  cut=\(useHeuristic ? "heuristic" : "llm")  aggressiveness=\(aggressiveness.rawValue)")
+        print("conditioning: normalize=\(conditioning.normalize)  slow-fast=\(conditioning.slowFastSpeech)  denoise=\(conditioning.denoise)")
 
         // fps for stage 6
         var fps = fpsOverride ?? 30
@@ -134,7 +142,7 @@ enum CLIRunner {
             }
             asr = loaded; print("Loaded pre-exported ASR from \(url.path)")
         } else {
-            do { asr = try await Transcription.transcribeVideoAudio(videoURL: mediaURL) }
+            do { asr = try await Transcription.transcribeVideoAudio(videoURL: mediaURL, conditioning: conditioning) }
             catch {
                 err("\nLive Apple ASR failed: \(error.localizedDescription)\nRe-run with --asr-json <file> to test stages 3–7 offline.\n")
                 return 2
@@ -170,7 +178,7 @@ enum CLIRunner {
             if contentSegments.isEmpty { print("No content map → skipped.") }
             else {
                 var cache: [String: String] = [:]
-                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache)
+                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache, conditioning: conditioning)
                 working = r.result
                 if r.retranscribes.isEmpty { print("No suspect spans exceeded the threshold.") }
                 else { for rt in r.retranscribes { print("  @\(rt.t)\n    BEFORE: \(rt.from)\n    AFTER : \(rt.to)\n") } }
