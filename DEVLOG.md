@@ -56,8 +56,15 @@ Branch: `caption-pipeline-improvements` (off `main`).
      appear on the word timeline / on-video caption, not just in the segment text. The timing-preservation
      self-check still calls `applyCorrectedText` WITHOUT an envelope, so it stays a 1:1 count check.
 5. **On-video caption overlay** (`PipelineViewModel.captionLines`/`currentCaption`, `ContentView`)
-   - Groups the corrected words into short lines (break at clause punctuation / pause / max length) on the
-     global raw-time axis and overlays the current line on the video player, synced to `currentTime`.
+   - Overlays the current caption line on the video player, synced to `currentTime` (global raw-time axis).
+6. **Semantic caption line breaks, piggybacked on correction** (`TranscriptionSegment.captionBreaks`)
+   - The per-word track is punctuation-stripped, so it can't tell where sentences end (length-chopping looked
+     bad). The correction LLM call now ALSO emits soft break hints (¦ markers) at meaning-aware boundaries;
+     `correct()` parses them into `captionBreaks` (unit indices) and the overlay splits on them — falling back
+     to punctuation, always capped so no line overflows. Zero extra API cost, style-agnostic (interview /
+     finance / poetry). Markers are stripped and never counted, so count-lock is unchanged.
+   - Decision: pause-based breaking was rejected — hesitation pauses in interviews fire false breaks and it's
+     speed-dependent (not universal). Semantic LLM breaks are the one method that generalises.
 
 ### Validation — 5 clips, all timing drift 0, PASS
 | clip | type | swapped | highlight |
