@@ -113,10 +113,12 @@ enum Transcription {
         var analysisURL = fileURL
         var conditionedURL: URL? = nil
         var timeScale = 1.0
+        var conditionReport: AudioConditionReport? = nil
         if !conditioning.isNoop, let cond = await AudioConditioner.condition(url: fileURL, options: conditioning) {
             analysisURL = cond.url
             conditionedURL = cond.url
             timeScale = cond.report.timeScale
+            conditionReport = cond.report
             Log.transcription.notice(
                 "conditioned audio \(cond.report.summary)",
                 telemetry: "Transcription audio conditioned",
@@ -164,7 +166,8 @@ enum Transcription {
             throw TranscriptionError.analysisFailed(error.localizedDescription)
         }
 
-        let decoded = decodeResults(collected, locale: locale, timeScale: timeScale)
+        var decoded = decodeResults(collected, locale: locale, timeScale: timeScale)
+        decoded.conditionReport = conditionReport
         Log.transcription.notice(
             "ok textChars=\(decoded.text.count) words=\(decoded.words.count) lang=\(decoded.language ?? "?")",
             telemetry: "Transcription finished",

@@ -186,9 +186,13 @@ enum CaptionPipeline {
             || (0xAC00...0xD7A3).contains(v)                                    // Hangul syllables
     }
 
-    /// Concatenated content-map dialogue overlapping a source-time window.
+    /// Content-map segment timestamps are whole-second, model-ESTIMATED (MediaDescriber parses MM:SS), so a
+    /// real overlap can sit just outside an exact window. Grow both windows by this slop before testing.
+    private static let mapWindowSlop: Double = 1.0
+
+    /// Concatenated content-map dialogue overlapping a source-time window (widened by `mapWindowSlop`).
     private static func mapDialogue(overlapping range: ClosedRange<Double>, in segs: [ContentSegment]) -> String {
-        segs.filter { $0.startSeconds < range.upperBound && $0.endSeconds > range.lowerBound }
+        segs.filter { $0.startSeconds < range.upperBound + mapWindowSlop && $0.endSeconds > range.lowerBound - mapWindowSlop }
             .compactMap { $0.dialogue?.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")

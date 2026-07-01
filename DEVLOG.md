@@ -4,6 +4,46 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-01 (f) — closing the functional gaps from (e)
+
+Branch: `claude/fast-speech-transcription-7zyzzn`. Implemented the ranked functional gaps. Still UNBUILT
+(Linux); verify on the Mac.
+
+1. **Fast-speech segmentation — breath-snapped forced breaks** (`PipelineViewModel.captionStops/captionLines`).
+   When a caption chunk exceeds `maxUnits` and has no comma to break on, it used to blind-cut at `s+maxUnits`.
+   Now it picks the biggest inter-word pause (>40 ms) in the window — a real breath — so forced breaks land at
+   micro-pauses instead of mid-phrase. Additive: falls back to the old hard cut when no gap data / no pause.
+   Gaps are computed from ASR word timings (no envelope needed), positional unit≈word mapping (same
+   approximation the chunk loop already uses).
+2. **Conditioning visibility** — `TranscriptionResult.conditionReport` now carries the AudioConditioner report
+   (non-Codable, transient, carried through `offsetting`). Surfaced in the GUI AUDIO QUALITY card
+   ("conditioned: normalize +9dB · 7.2 syl/s · slow 0.85×") and the CLI stage-2 line. Plus CLI
+   `--ab-conditioning`: re-runs ASR with conditioning OFF and prints both transcripts to compare (opt-in,
+   doubles ASR time).
+3. **Progress legibility** (session (a)'s flagged priority) — `PipelineStage` gained `startedAt` + `detail`;
+   `ClipModel.mark` stamps the start time, `detail(_:_:)` sets a sub-status. GUI shows a live
+   `TimelineView(.periodic)` status line under the clip header ("Content map · Gemini watching… · 0:23") so
+   the slow content-map/retranscribe stages never look hung.
+4. **Content-map timestamp slop** — the whole-second, model-estimated map timestamps now get ±1.0 s slop in
+   both overlap checks (`CaptionPipeline.mapDialogue`, `TranscriptCorrector.mapRef`) so a reference just
+   outside an exact window is still matched (charOverlap gating downstream absorbs any extra dialogue pulled
+   in). Cuts false negatives in suspect-span detection.
+
+### Deferred (needs the compiler, do on the Mac)
+- **Unit tests** — the pure functions (`compress`/`normalizePeak`/`gate`/`syllableRate`/`stretchRate`,
+  `CaptionBuilder.units`, `charOverlap`, `alignBlocks`) are ideal XCTest targets, but a test target can't
+  `@testable import` an executable target. The refactor: add a library target `CaptionLabKit` with all the
+  logic, leave `CaptionLab` as a thin executable (`main`/`@main` only) depending on it, then a `.testTarget`
+  on the Kit. Doing that package split blind risks a broken `@main`/duplicate-main build, so it's left for the
+  Mac where the compiler catches it immediately. NOT started to avoid breaking the build.
+- CLAUDE.md still says "macOS 26" → bump to 27 after the first successful build confirms the SDK.
+
+### Verify on the Mac (carried from (e), still open)
+The 5 likely bugs from session (e) are unchanged — SoundClassifier fed a video container, time-pitch priming
+latency, post-resample clipping detection, exact-Double timing equality, zero-width-word cut blindness.
+
+---
+
 ## Session 2026-07-01 (e) — gap audit of sessions b–d (pre-Mac-build review)
 
 Branch: `claude/fast-speech-transcription-7zyzzn`. Re-reviewed the new (still unbuilt) code adversarially +

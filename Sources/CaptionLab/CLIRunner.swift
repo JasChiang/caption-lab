@@ -12,6 +12,7 @@ enum CLIRunner {
       --no-normalize           Disable pre-ASR normalize + compression (default: on; helps quiet speech).
       --no-slow-fast           Disable pre-ASR auto slow-down of fast speech (default: on).
       --denoise                Enable pre-ASR light denoise (high-pass + gentle gate; default: off).
+      --ab-conditioning        Run ASR twice (conditioning ON vs OFF) and print both transcripts to compare.
       --no-retranscribe        Skip stage 5 (Gemini-audio re-transcription of suspect spans).
       --cut-heuristic          Use the heuristic stutter/filler detector instead of the LLM (stage 6).
       --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap; default balanced).
@@ -47,6 +48,7 @@ enum CLIRunner {
         var mediaPath: String?
         var glossaryArg: [String] = []
         var conditioning = AudioConditioning()
+        var abConditioning = false
         var doRetranscribe = true
         var useHeuristic = false
         var aggressiveness: CutAggressiveness = .balanced
@@ -65,6 +67,7 @@ enum CLIRunner {
             case "--no-normalize": conditioning.normalize = false
             case "--no-slow-fast": conditioning.slowFastSpeech = false
             case "--denoise": conditioning.denoise = true
+            case "--ab-conditioning": abConditioning = true
             case "--no-retranscribe": doRetranscribe = false
             case "--cut-heuristic": useHeuristic = true
             case "--aggressiveness": i += 1; if i < args.count, let v = CutAggressiveness(rawValue: args[i]) { aggressiveness = v }
@@ -153,10 +156,23 @@ enum CLIRunner {
             }
         }
         print("language=\(asr.language ?? "?")  words=\(asr.words.count)  segments=\(asr.segments.count)")
+        if let cr = asr.conditionReport { print("conditioning applied: \(cr.summary)") }
         for w in asr.words.prefix(20) {
             print("  \(w.start.map { String(format: "%.2f", $0) } ?? "—")–\(w.end.map { String(format: "%.2f", $0) } ?? "—")  \(w.text)")
         }
         dump(asr, "asr.json")
+
+        // A/B: re-run ASR with conditioning OFF so the two transcripts can be eyeballed side by side. Opt-in
+        // (doubles ASR time) and only meaningful on live audio, not a pre-loaded --asr-json.
+        if abConditioning, asrJSONPath == nil {
+            print("\n── A/B conditioning ──")
+            if let off = try? await Transcription.transcribeVideoAudio(videoURL: mediaURL, conditioning: .off) {
+                print("  OFF: words=\(off.words.count)  segments=\(off.segments.count)")
+                print("  ON : words=\(asr.words.count)  segments=\(asr.segments.count)  [\(asr.conditionReport?.summary ?? "no-op")]")
+                print("  --- transcript OFF ---\n  \(off.text)")
+                print("  --- transcript ON  ---\n  \(asr.text)")
+            } else { print("  (second ASR run failed)") }
+        }
 
         // [3] Glossary
         header(3, "HARVESTED GLOSSARY TERMS")

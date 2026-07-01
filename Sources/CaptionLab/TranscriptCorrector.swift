@@ -22,9 +22,12 @@ enum TranscriptCorrector {
         // audio. It lets correction fix soundalike errors that have NO textual cue (ASR 說得很很一樣 while the
         // map heard 說得很很遺憾): the recognizer's word is plausible on its own, so only a second opinion on
         // the audio can catch it.
+        // Content-map timestamps are whole-second, model-estimated; widen the window so a reference that sits
+        // just outside the segment's exact bounds is still matched.
+        let mapSlop = 1.0
         func mapRef(_ seg: TranscriptionSegment) -> String? {
             let d = contentSegments
-                .filter { $0.startSeconds < seg.end && $0.endSeconds > seg.start }
+                .filter { $0.startSeconds < seg.end + mapSlop && $0.endSeconds > seg.start - mapSlop }
                 .compactMap { $0.dialogue?.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
                 .joined(separator: " ")

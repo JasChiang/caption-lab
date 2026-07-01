@@ -28,6 +28,9 @@ struct TranscriptionResult: Sendable, Codable {
     /// e.g. 退化性關節炎). Rides the corrected result; excluded from Codable so cached transcripts — which
     /// never carry it — stay decodable.
     var atomicTerms: [String] = []
+    /// What pre-ASR conditioning did to the audio (normalize / slow-down), for the GUI/CLI to surface. Not
+    /// Codable — a transient annotation on the live result, never persisted.
+    var conditionReport: AudioConditionReport? = nil
 
     enum CodingKeys: String, CodingKey { case text, language, words, segments }
 
@@ -43,7 +46,8 @@ struct TranscriptionResult: Sendable, Codable {
             segments: segments.map {
                 TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
             },
-            atomicTerms: atomicTerms
+            atomicTerms: atomicTerms,
+            conditionReport: conditionReport
         )
     }
 }

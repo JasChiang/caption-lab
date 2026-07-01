@@ -13,6 +13,7 @@ struct ResultsPanels: View {
                     Spacer()
                     StageDots(stages: clip.stages)
                 }
+                runningStatus(clip)
                 audioQuality(clip)
                 cutSummary(clip)
                 qwenCard(clip)
@@ -24,6 +25,24 @@ struct ResultsPanels: View {
         } else {
             Text("Add a clip and run the pipeline to see results.")
                 .font(Theme.ui(12)).foregroundStyle(Theme.faint).panelCard()
+        }
+    }
+
+    // MARK: Live running-stage status (elapsed timer so a slow stage never looks hung)
+
+    @ViewBuilder private func runningStatus(_ clip: ClipModel) -> some View {
+        if let s = clip.runningStage {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let elapsed = s.startedAt.map { max(0, Int(ctx.date.timeIntervalSince($0))) } ?? 0
+                HStack(spacing: Theme.Space.xs) {
+                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                    Text("\(s.name)\(s.detail.map { " · \($0)" } ?? "") · \(elapsed / 60):\(String(format: "%02d", elapsed % 60))")
+                        .font(Theme.mono(10)).foregroundStyle(Theme.accent)
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xs)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.sm).fill(Theme.accent.opacity(0.10)))
+            }
         }
     }
 
@@ -46,6 +65,9 @@ struct ResultsPanels: View {
                         ForEach(Array(q.warnings.enumerated()), id: \.offset) { _, w in
                             Text("⚠︎ \(w)").font(Theme.ui(11)).foregroundStyle(Theme.cut)
                         }
+                    }
+                    if let cr = clip.asr?.conditionReport {
+                        Text("conditioned: \(cr.summary)").font(Theme.mono(10)).foregroundStyle(Theme.faint)
                     }
                 }
             } else { empty("not analyzed yet") }

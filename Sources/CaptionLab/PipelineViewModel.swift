@@ -11,6 +11,10 @@ struct PipelineStage: Identifiable, Equatable {
     let id: Int
     let name: String
     var state: StageState = .pending
+    /// When this stage entered `.running` — drives the live elapsed timer so a slow stage never looks hung.
+    var startedAt: Date? = nil
+    /// Optional sub-status for the active stage (e.g. "Gemini watching the whole clip").
+    var detail: String? = nil
 }
 
 struct DiffChange: Identifiable { let id = UUID(); let from: String; let to: String }
@@ -76,7 +80,15 @@ final class ClipModel: Identifiable {
     var effectiveDuration: Double { max(0, duration - secondsSaved) }
 
     func stateOf(_ id: Int) -> StageState { stages.first(where: { $0.id == id })?.state ?? .pending }
-    func mark(_ id: Int, _ state: StageState) { if let i = stages.firstIndex(where: { $0.id == id }) { stages[i].state = state } }
+    func mark(_ id: Int, _ state: StageState) {
+        guard let i = stages.firstIndex(where: { $0.id == id }) else { return }
+        if case .running = state { stages[i].startedAt = Date() } else { stages[i].detail = nil }
+        stages[i].state = state
+    }
+    /// Set the active stage's sub-status line (cleared automatically when the stage leaves `.running`).
+    func detail(_ id: Int, _ text: String?) { if let i = stages.firstIndex(where: { $0.id == id }) { stages[i].detail = text } }
+    /// The stage currently running, if any — for the live status line.
+    var runningStage: PipelineStage? { stages.first { $0.state == .running } }
     func resetStages() { stages = makeStages() }
 }
 
@@ -151,8 +163,18 @@ final class PipelineViewModel {
                 guard !segWords.isEmpty else { continue }
                 let du = CaptionBuilder.units(seg.text, keepPunctuation: true)   // units keep trailing punctuation
                 guard !du.isEmpty else { continue }
+                // Inter-word silence at each unit boundary (positional unit≈word mapping, same as the chunk
+                // loop below). Lets a forced break land on a real breath instead of mid-phrase — the main
+                // lever for fast speech, where semantic ¦ hints are sparse and pauses are few but real.
+                var gaps = [Double](repeating: 0, count: du.count)
+                let m = min(du.count, segWords.count)
+                if m >= 2 {
+                    for k in 1..<m {
+                        if let e0 = segWords[k - 1].end, let s1 = segWords[k].start { gaps[k] = max(0, s1 - e0) }
+                    }
+                }
                 var s = 0, wi = 0
-                for e in captionStops(du: du, llm: seg.captionBreaks, maxUnits: 16) {
+                for e in captionStops(du: du, llm: seg.captionBreaks, gaps: gaps, maxUnits: 16) {
                     guard e > s else { continue }
                     let last = (e == du.count)
                     let n = last ? (segWords.count - wi) : min(e - s, segWords.count - wi)
@@ -172,7 +194,7 @@ final class PipelineViewModel {
 
     /// Unit indices to break AFTER (the list always ends at `du.count`): the LLM's ¦ hints when present, else
     /// punctuation-derived, then extra breaks inserted so no chunk exceeds `maxUnits` (preferring a comma).
-    private func captionStops(du: [String], llm: [Int], maxUnits: Int) -> [Int] {
+    private func captionStops(du: [String], llm: [Int], gaps: [Double] = [], maxUnits: Int) -> [Int] {
         var brk = Set<Int>()
         if !llm.isEmpty {
             for b in llm where b > 0 && b < du.count { brk.insert(b) }
@@ -191,8 +213,18 @@ final class PipelineViewModel {
             let e = stops[k + 1]
             while e - s > maxUnits {
                 let hardCut = s + maxUnits
-                let cut = (stride(from: min(e - 1, hardCut), through: s + maxUnits / 2, by: -1)
-                    .first { du[$0 - 1].contains { "，、；：,;".contains($0) } }) ?? hardCut
+                let lo = s + maxUnits / 2, hi = min(e - 1, hardCut)
+                // 1) a comma/semicolon in the window (semantic break); else
+                // 2) the biggest breath (inter-word pause > 40 ms) in the window (acoustic break); else
+                // 3) a blind hard cut.
+                let commaCut = stride(from: hi, through: lo, by: -1)
+                    .first { du[$0 - 1].contains { "，、；：,;".contains($0) } }
+                var cut = commaCut ?? hardCut
+                if commaCut == nil, !gaps.isEmpty, lo <= hi {
+                    var bestGap = 0.04, best = -1
+                    for p in lo...hi where p < gaps.count && gaps[p] > bestGap { bestGap = gaps[p]; best = p }
+                    if best >= 0 { cut = best }
+                }
                 brk.insert(cut); s = cut
             }
         }
@@ -376,6 +408,7 @@ final class PipelineViewModel {
 
         // [1] Content map
         clip.mark(1, .running)
+        clip.detail(1, "Gemini watching the whole clip (30s–2min)")
         do {
             let r = try await MediaDescriber.describeVideoContentMap(url: clip.url, language: language, model: model)
             clip.contentSegments = r.segments; clip.contentLabel = r.label; clip.mark(1, .done)
@@ -409,6 +442,7 @@ final class PipelineViewModel {
         else if clip.contentSegments.isEmpty { clip.mark(5, .skipped) }
         else {
             clip.mark(5, .running)
+            clip.detail(5, "re-transcribing suspect spans with Gemini audio")
             var cache: [String: String] = [:]
             let r = await CaptionPipeline.retranscribeSuspectSpans(
                 result: corr.result, url: clip.url, contentSegments: clip.contentSegments, spanCache: &cache,
