@@ -123,6 +123,45 @@ final class PipelineViewModel {
         clips.prefix(index).reduce(0) { $0 + $1.duration }
     }
 
+    // MARK: - On-video captions (simple overlay)
+
+    /// A displayable caption phrase on the GLOBAL raw-time axis.
+    struct CaptionLine: Equatable { let start: Double; let end: Double; let text: String }
+
+    /// Group each clip's (corrected) words into short caption lines for the on-video overlay: break at a
+    /// sentence/clause punctuation mark, a noticeable pause, or a max length. Times are global raw seconds
+    /// (rawOffset + word time), the same axis as `currentTime`.
+    func captionLines() -> [CaptionLine] {
+        var lines: [CaptionLine] = []
+        for (idx, clip) in clips.enumerated() {
+            let off = rawOffset(of: idx)
+            var group: [TranscriptionWord] = []
+            var prevEnd: Double?
+            func flush() {
+                defer { group = [] }
+                guard let s = group.first?.start, let e = group.last?.end else { return }
+                let text = group.map(\.text).joined().trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty { lines.append(CaptionLine(start: off + s, end: off + e, text: text)) }
+            }
+            for w in clip.words {
+                guard let s = w.start, w.end != nil else { continue }
+                if let pe = prevEnd, s - pe > 0.6 { flush() }
+                group.append(w)
+                let endsClause = w.text.last.map { "。．，、！？!?…".contains($0) } ?? false
+                if endsClause || group.map(\.text).joined().count >= 14 { flush() }
+                prevEnd = w.end
+            }
+            flush()
+        }
+        return lines
+    }
+
+    /// Caption text to overlay at the current playhead (global raw time), or "" when between lines.
+    var currentCaption: String {
+        let t = currentTime
+        return captionLines().last { $0.start - 0.05 <= t && t <= $0.end + 0.2 }?.text ?? ""
+    }
+
     // MARK: - Track editing
 
     func addFiles(_ urls: [URL]) {
@@ -313,7 +352,7 @@ final class PipelineViewModel {
         // [4] Correction
         clip.mark(4, .running)
         let corr = await TranscriptCorrector.correct(asr, model: model, glossary: clip.effectiveGlossary,
-                                                     contentSegments: clip.contentSegments)
+                                                     contentSegments: clip.contentSegments, url: clip.url)
         clip.correctionSucceeded = corr.corrected
         clip.diffChanges = corr.changes.map { DiffChange(from: $0.from, to: $0.to) }
         clip.atomicTerms = corr.result.atomicTerms

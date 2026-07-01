@@ -103,6 +103,19 @@ struct ContentView: View {
         VStack(spacing: Theme.Space.sm) {
             AVPlayerViewRepresentable(player: vm.player)
                 .frame(minHeight: 240)
+                .overlay(alignment: .bottom) {
+                    if !vm.currentCaption.isEmpty {
+                        Text(vm.currentCaption)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                            .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
+                            .padding(.bottom, 16)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.stroke))
 

@@ -156,7 +156,7 @@ enum CLIRunner {
         // [4] Correction
         header(4, "TEXT CORRECTION (Gemini, 1:1 segment writeback)")
         let corr = await TranscriptCorrector.correct(asr, model: model, glossary: glossary,
-                                                     contentSegments: contentSegments)
+                                                     contentSegments: contentSegments, url: mediaURL)
         if !corr.corrected { print("Correction FAILED — using RAW transcript.") }
         print("changed segments: \(corr.changes.count)")
         for c in corr.changes { print("  BEFORE: \(c.from)\n  AFTER : \(c.to)\n") }

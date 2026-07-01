@@ -13,7 +13,7 @@ enum TranscriptCorrector {
     /// means every attempt failed and the caller is getting the RAW transcript back — surface that, don't
     /// pretend it was cleaned.
     static func correct(_ result: TranscriptionResult, model: String = GeminiClient.defaultModel,
-                        glossary: [String] = [], contentSegments: [ContentSegment] = []) async
+                        glossary: [String] = [], contentSegments: [ContentSegment] = [], url: URL? = nil) async
         -> (result: TranscriptionResult, corrected: Bool, changes: [(from: String, to: String)]) {
         let segs = result.segments
         guard !segs.isEmpty else { return (result, true, []) }
@@ -104,7 +104,10 @@ enum TranscriptCorrector {
         }
 
         let newSegs = zip(segs, corrected).map { TranscriptionSegment(text: $1, start: $0.start, end: $0.end) }
-        let newWords = applyCorrectedText(to: result.words, segments: newSegs, corrected: corrected)
+        // With the source audio we can re-time words the recognizer never emitted (a recovered HDMI 2.1 / a
+        // dropped syllable) onto energy peaks, so they land on the timeline instead of only in the segment text.
+        let envelope: AudioEnvelope? = url == nil ? nil : (try? await AudioEnvelopeExtractor.extract(from: url!))
+        let newWords = applyCorrectedText(to: result.words, segments: newSegs, corrected: corrected, envelope: envelope)
         // Surface WORD changes (homophone/typo fixes like 外麵→外面, 試用→使用) so the caller can show the
         // user what the LLM rewrote — punctuation-only differences are ignored.
         func content(_ s: String) -> String { String(s.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init)) }
@@ -128,84 +131,91 @@ enum TranscriptCorrector {
         return out
     }
 
-    /// Propagates corrected segment text onto the per-word ASR timings (which karaoke renders), keeping
-    /// each word's real start/end. Matches by content UNITS — one CJK character per unit, a run of
-    /// letters/digits (a Latin word / number) per unit, punctuation + whitespace ignored. When a
-    /// segment's corrected unit count equals its ASR word count, each word's text is swapped for the
-    /// corrected unit. Unit matching survives BOTH the LLM adding punctuation AND brand-name fixes that
-    /// change letter count (Michos→macOS is still one unit→one unit), which a character-count match
-    /// could not. Words in a segment that doesn't align are left untouched.
+    /// Propagates the corrected segment text onto the per-word ASR timings that caption/karaoke rendering
+    /// uses, keeping each word's real start/end. Matches by content UNITS (one CJK char, or a run of
+    /// letters/digits, per unit; punctuation/space ignored). Per segment:
+    ///  • exact 1:1 count → swap each word's text in place;
+    ///  • drift (a stutter merged, a homophone with a different letter count) → align ASR↔corrected units by
+    ///    LCS and swap only where the runs line up, leaving unmatched words as raw ASR;
+    ///  • an INSERTED run the recognizer never emitted (Chinese speech that dropped an English "HDMI 2.1") →
+    ///    with an `envelope` present, re-time those corrected units onto syllable energy peaks so they
+    ///    actually appear on the timeline. Without an envelope the run is left as raw ASR, so this stays a
+    ///    1:1, count-preserving writeback for the timing-preservation self-check.
     static func applyCorrectedText(
-        to words: [TranscriptionWord], segments: [TranscriptionSegment], corrected: [String]
+        to words: [TranscriptionWord], segments: [TranscriptionSegment], corrected: [String],
+        envelope: AudioEnvelope? = nil
     ) -> [TranscriptionWord] {
-        var newWords = words
+        // Single pass over the time-ordered words: slice out each segment's run and rebuild it. Words that
+        // fall in no segment (gaps between them) pass through unchanged.
+        var out: [TranscriptionWord] = []
+        var wi = 0
         for (i, s) in segments.enumerated() where i < corrected.count {
-            let wordIdxs = newWords.indices.filter { w in
-                guard let st = newWords[w].start, let en = newWords[w].end else { return false }
+            var seg: [TranscriptionWord] = []
+            while wi < words.count {
+                let w = words[wi]
+                guard let st = w.start, let en = w.end else { out.append(w); wi += 1; continue }
                 let mid = (st + en) / 2
-                return mid >= s.start && mid < s.end
+                if mid < s.start { out.append(w); wi += 1; continue }  // before this segment
+                if mid >= s.end { break }                             // past this segment
+                seg.append(w); wi += 1
             }
             let units = CaptionBuilder.units(corrected[i], keepPunctuation: false)
-            guard !units.isEmpty, !wordIdxs.isEmpty else { continue }
-            // Fast path: whole segment lines up 1:1 → swap every word (cheapest, unchanged behavior).
-            if units.count == wordIdxs.count {
-                for (j, wi) in wordIdxs.enumerated() {
-                    newWords[wi] = TranscriptionWord(text: units[j], start: newWords[wi].start, end: newWords[wi].end)
-                }
-                continue
-            }
-            // Granular path: the segment's unit count drifted (a stutter merged, a syllable added). Instead of
-            // skipping the WHOLE segment — which threw away easy same-position fixes like 整年檢壓→正念減壓 just
-            // because one unit elsewhere didn't line up — align ASR units to corrected units by LCS and swap
-            // only where the mapping is unambiguous (matched anchors + equal-length substitution runs between
-            // them). Insertions/deletions are left as raw ASR: this stage never re-times, so a genuinely added
-            // syllable is left for the energy-peak re-timing in the retranscribe stage.
-            let asrUnits = wordIdxs.map { newWords[$0].text }
-            for (aj, text) in alignedPositionalSwaps(a: asrUnits, b: units) {
-                let wi = wordIdxs[aj]
-                newWords[wi] = TranscriptionWord(text: text, start: newWords[wi].start, end: newWords[wi].end)
-            }
+            out.append(contentsOf: rebuildSegment(seg, units: units, envelope: envelope))
         }
-        return newWords
+        while wi < words.count { out.append(words[wi]); wi += 1 }
+        return out
     }
 
-    /// Aligns ASR units `a` to corrected units `b` and returns, per index of `a`, the corrected text it
-    /// should take — but ONLY where the mapping is safe: LCS-matched positions, plus runs between matches
-    /// whose ASR and corrected lengths are equal (a pure substitution like 金→親 / 賭→讀 maps 1:1, keeping
-    /// that word's original timing). Unequal runs (an inserted or dropped syllable) are omitted, so those
-    /// ASR words keep their own text rather than smearing corrected text across mistimed slots.
-    static func alignedPositionalSwaps(a: [String], b: [String]) -> [Int: String] {
+    /// Rebuilds one segment's words so their text matches `units`, keeping ASR timing where the two line up
+    /// and re-timing an inserted/dropped run on energy peaks when an `envelope` is given.
+    private static func rebuildSegment(_ seg: [TranscriptionWord], units: [String],
+                                       envelope: AudioEnvelope?) -> [TranscriptionWord] {
+        guard !units.isEmpty else { return seg }   // nothing corrected → keep as-is
+        guard !seg.isEmpty else { return seg }     // no timing to attach to
+        if units.count == seg.count {
+            return zip(seg, units).map { TranscriptionWord(text: $1, start: $0.start, end: $0.end) }
+        }
+        var result: [TranscriptionWord] = []
+        for block in alignBlocks(a: seg.map(\.text), b: units) {
+            let aw = Array(seg[block.a]), bu = Array(units[block.b])
+            if bu.isEmpty {
+                result.append(contentsOf: aw)                                    // deletion: keep ASR words
+            } else if aw.count == bu.count {
+                result.append(contentsOf: zip(aw, bu).map { TranscriptionWord(text: $1, start: $0.start, end: $0.end) })
+            } else if let env = envelope, let s = aw.first?.start, let e = aw.last?.end {
+                result.append(contentsOf: CaptionPipeline.placeOnEnergyPeaks(bu, start: s, end: e, envelope: env))
+            } else {
+                result.append(contentsOf: aw)                                    // no envelope → leave raw ASR
+            }
+        }
+        return result
+    }
+
+    private struct AlignBlock { let a: Range<Int>; let b: Range<Int> }
+
+    /// Minimal LCS diff opcodes over units: each matched position is a singleton equal block; the differing
+    /// run between two matches is one block (which rebuildSegment classifies as swap / insert / delete).
+    private static func alignBlocks(a: [String], b: [String]) -> [AlignBlock] {
         let n = a.count, m = b.count
-        guard n > 0, m > 0 else { return [:] }
-        // LCS length table (suffix DP).
+        guard n > 0, m > 0 else { return [AlignBlock(a: 0..<n, b: 0..<m)] }
         var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
         for i in stride(from: n - 1, through: 0, by: -1) {
             for j in stride(from: m - 1, through: 0, by: -1) {
                 dp[i][j] = a[i] == b[j] ? dp[i + 1][j + 1] + 1 : max(dp[i + 1][j], dp[i][j + 1])
             }
         }
-        // Backtrack the matched (ai, bj) anchor pairs.
-        var matches: [(Int, Int)] = []
-        var i = 0, j = 0
+        var blocks: [AlignBlock] = []
+        var i = 0, j = 0, pa = 0, pb = 0
+        func emitGap(_ ae: Int, _ be: Int) { if ae > pa || be > pb { blocks.append(AlignBlock(a: pa..<ae, b: pb..<be)) } }
         while i < n, j < m {
-            if a[i] == b[j] { matches.append((i, j)); i += 1; j += 1 }
-            else if dp[i + 1][j] >= dp[i][j + 1] { i += 1 }
-            else { j += 1 }
+            if a[i] == b[j] {
+                emitGap(i, j)
+                blocks.append(AlignBlock(a: i..<(i + 1), b: j..<(j + 1)))
+                i += 1; j += 1; pa = i; pb = j
+            } else if dp[i + 1][j] >= dp[i][j + 1] { i += 1 } else { j += 1 }
         }
-        var out: [Int: String] = [:]
-        var prevA = -1, prevB = -1
-        func fillEqualGap(aEnd: Int, bEnd: Int) {
-            let aLen = aEnd - (prevA + 1), bLen = bEnd - (prevB + 1)
-            guard aLen > 0, aLen == bLen else { return }
-            for k in 0..<aLen { out[prevA + 1 + k] = b[prevB + 1 + k] }
-        }
-        for (ai, bj) in matches {
-            fillEqualGap(aEnd: ai, bEnd: bj)   // equal-length substitution run before this anchor
-            out[ai] = b[bj]                    // the matched unit (identical text; keeps timing)
-            prevA = ai; prevB = bj
-        }
-        fillEqualGap(aEnd: n, bEnd: m)         // trailing run after the last anchor
-        return out
+        emitGap(n, m)
+        return blocks
     }
 
 }
