@@ -4,7 +4,56 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
-## Session 2026-07-01 (d) — Apple-framework research + SoundAnalysis music detection
+## Session 2026-07-01 (e) — gap audit of sessions b–d (pre-Mac-build review)
+
+Branch: `claude/fast-speech-transcription-7zyzzn`. Re-reviewed the new (still unbuilt) code adversarially +
+scanned the rest of the pipeline. Ranked list of what's NOT solid yet.
+
+### Likely bugs in the new code (verify on the Mac, in this order)
+1. **SoundClassifier is fed the VIDEO file** (`AudioQuality.analyze(url:)` gets clip.url / mediaURL).
+   `SNAudioFileAnalyzer` may not open a video container (docs say "audio file"; likely AVAudioFile-backed).
+   If it throws, music detection silently returns nil forever. Fix if so: extract the audio track first
+   (reuse `Transcription.extractAudioTrack` / a temp WAV) and feed THAT to the classifier.
+2. **AVAudioUnitTimePitch priming latency**: the offline render in `AudioConditioner.timeStretch` may emit
+   ~0.1 s of priming before real audio, shifting ALL word timings on stretched clips by a constant offset.
+   Verify: on a slowed clip, click a word chip and check the audio actually says that word. Fix if so: trim
+   `pitch.latency` (or measure lead-in silence) off the front before writing.
+3. **Clipping detection measured post-resample**: `readMonoFloats` decodes at 16 kHz mono — resample
+   filtering + stereo→mono averaging can pull clipped peaks below the 0.98 threshold → under-detection.
+   Fix if so: measure clipping on the native-rate, per-channel samples instead.
+4. **Exact-Double-equality timing matches** now carry scaled values (`start * timeScale`):
+   `CaptionPipeline.swift` segment match (`$0.start == s.seg.start …`) and the stage-7 drift checks
+   (`a.start != b.start`) require the product to flow through bit-identical. Today it does (single multiply
+   at decode); any future re-derivation elsewhere will silently break span writeback / show fake FAIL.
+   Consider switching those to epsilon compares while touching the area.
+5. **Zero-width-word cut blindness** (pre-existing, worsened slightly by scaling): a timed word whose
+   start/end round to the same frame is dropped by WordCutPlanner's `endFrame > startFrame` filter and can
+   never be cut. Low fps + scaled timings widen the window.
+
+### Functional gaps (ranked by value)
+- **Fast-speech SEGMENTATION still untouched** — the ② layer from the original analysis. Run-on segments
+  (no pauses when talking fast) go into correction as one huge line; the planned dual-track split (energy
+  valleys as candidates + LLM ¦ choosing among them) is still backlog. This is the biggest remaining lever
+  for fast speech.
+- **Conditioning is invisible in the GUI** — the report (syl/s, chosen stretch, gain) only goes to stderr.
+  Surface per-clip "conditioned: slow 0.85× · +9 dB" in the CLIP panel; also add the promised A/B tool
+  (same clip, conditioning on vs off, diff the transcripts) so tuning has evidence.
+- **Progress legibility** — flagged "user's priority" in session (a), still not done (stages show only
+  binary running/done; the 30 s–2 min content-map stage looks hung).
+- **Content-map timestamps are whole-second, model-estimated** — retranscribe's suspect-window overlap
+  (charOverlap over a time window) inherits ±1 s+ slop; a tighter map (or fuzzy window growth) would cut
+  false negatives on suspect-span detection.
+- **Zero tests** — the DSP passes (`compress`, `normalizePeak`, `gate`, `syllableRate`, `stretchRate`,
+  `placeOnEnergyPeaks`, `units`) are pure functions over [Float]/String, ideal for a first XCTest target on
+  the Mac; would have caught the log10f issue class at build time.
+- **Triple full-file read on clip add** (floats + envelope + classifier) — fine for a lab tool, consolidate
+  into one decode if it ever feels slow.
+- Docs: CLAUDE.md still says "macOS 26" — machine is on macOS 27 beta (Xcode 27); update after the build.
+
+### Verified OK during this audit
+Theme members all exist; WordCutPlanner/RippleEngine are all-Int frame math (scaled timings safe);
+TimelineView clamps zero-width chips to 14 px (no invisible words); CutStutters' valley snapping is
+grid-based, no exact-equality on times.
 
 Branch: `claude/fast-speech-transcription-7zyzzn`. Researched (Apple docs / WWDC25) which Apple tools help
 the fast/quiet/accuracy goals. Findings + one shippable win.
