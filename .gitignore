@@ -29,5 +29,8 @@ final.json
 models/
 *.mlx
 
+# Secrets / local env (loaded by ./run.sh)
+.env
+
 # macOS
 .DS_Store
