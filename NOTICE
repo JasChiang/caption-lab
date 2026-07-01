@@ -1,0 +1,43 @@
+caption-lab
+===========
+
+This project is a standalone experiment harness that reproduces the
+caption-correction / forced-alignment pipeline of PalmierPro. It is a
+DERIVATIVE WORK of PalmierPro and is therefore licensed under the
+GNU General Public License v3.0 (see LICENSE).
+
+Upstream / origin
+-----------------
+PalmierPro — https://github.com/palmier-io/palmier-pro (GPL-3.0)
+The code here was extracted from a private BYOK fork of that project.
+
+Provenance of the extracted sources
+-----------------------------------
+Files whose logic originates from upstream palmier-io/palmier-pro
+(present in upstream at extraction time):
+  - Sources/CaptionLab/Transcription.swift      (Apple SpeechTranscriber front-end)
+  - Sources/CaptionLab/CaptionBuilder.swift      (only the `units` / CJK helpers)
+  - Sources/CaptionLab/Models.swift              (ContentSegment, from MediaManifest.swift)
+  - Sources/CaptionLab/WordCutPlanner.swift      (+ RippleEngine.mergeRanges)
+
+Files added in the fork (not present upstream), extracted here:
+  - Sources/CaptionLab/TranscriptCorrector.swift (Gemini text correction + 1:1 writeback)
+  - Sources/CaptionLab/GeminiClient.swift        (BYOK Gemini client; key via GEMINI_API_KEY)
+  - Sources/CaptionLab/MediaDescriber.swift      (deep content-map generation path)
+  - Sources/CaptionLab/CaptionPipeline.swift     (glossary harvest + retranscribe, de-tangled from EditorViewModel)
+  - Sources/CaptionLab/CutStutters.swift         (disfluency/stutter cut; defaultFillers from EditorViewModel+AutoCut)
+  - the ForcedAligner text-alignment logic
+
+Additions original to caption-lab (not from PalmierPro):
+  - The SwiftUI GUI (AppEntry, ContentView, TrackViews, TimelineView, ControlsPanel,
+    ResultsPanels, PipelineViewModel, Theme) — the multi-clip track, waveform timeline,
+    joined AVMutableComposition playback, and A/B chip lanes.
+  - The Qwen MLX forced-aligner backend: Sources/CaptionLab/QwenAligner.swift and
+    aligner/qwen_align.py, wrapping mlx-community/Qwen3-ForcedAligner-0.6B-8bit via mlx-audio.
+  - setup.sh, CLAUDE.md, README.md.
+
+Modifications from the originals
+--------------------------------
+Key loading was changed from Keychain to the GEMINI_API_KEY environment variable;
+EditorViewModel-bound methods were lifted into free functions with view-model plumbing
+removed; algorithms were kept byte-faithful. See git history for details.

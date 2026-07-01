@@ -1,0 +1,33 @@
+# Swift build
+.build/
+*.xcodeproj
+*.swiftpm
+
+# Python venv (recreate with ./setup.sh)
+.venv/
+__pycache__/
+*.pyc
+
+# Aligner / audio scratch
+*.wav
+*.aiff
+*.caf
+aligned*.json
+zh_aligned.json
+
+# Pipeline dumps (--dump-json)
+dump/
+*.dump.json
+contentmap.json
+asr.json
+corrected.json
+retranscribed.json
+final.json
+
+# Model / HF caches
+.cache/
+models/
+*.mlx
+
+# macOS
+.DS_Store
