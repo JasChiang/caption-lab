@@ -68,6 +68,10 @@ enum TranscriptCorrector {
         language. Also wrap any multi-character TERM that must never be split across two caption lines — a \
         technical term, proper noun, or fixed compound phrase (e.g. ⟦退化性關節炎⟧, ⟦iPhone⟧) — in ⟦ ⟧. \
         Wrap only genuine terms, never ordinary word sequences, and never change the characters inside. \
+        Also insert the marker ¦ at natural ON-SCREEN CAPTION line breaks: after a clause or complete \
+        thought so no caption line runs long, but NEVER mid-word, never right before a trailing particle \
+        (的/了/嗎/呢), and never inside a ⟦ ⟧ term. Aim for readable chunks of roughly 6–16 characters; a \
+        short line needs no ¦. The ¦ is a hint only — it is stripped and never counts as a character. \
         Return a JSON object {"lines":[…]} whose `lines` array has EXACTLY \(segs.count) items — one \
         corrected line per input line, same order. Do not split or merge lines; one input number → one array item.
         """
@@ -95,15 +99,21 @@ enum TranscriptCorrector {
         }
         guard let marked else { return (result, false, []) }  // all attempts failed → raw, and say so
 
-        // Pull the atomic terms out of the ⟦ ⟧ markers, then strip the markers so segment text stays clean
-        // (and keeps unit-for-unit alignment with the ASR words — the markers are dropped by units() anyway).
+        // Pull the atomic terms out of the ⟦ ⟧ markers and the caption breaks out of the ¦ markers, then
+        // strip both so segment text stays clean and keeps unit-for-unit alignment with the ASR words.
         var atomicTerms: Set<String> = []
+        var segBreaks: [[Int]] = []
         let corrected = marked.map { line -> String in
             atomicTerms.formUnion(Self.extractTerms(line))
-            return line.replacingOccurrences(of: "\u{27E6}", with: "").replacingOccurrences(of: "\u{27E7}", with: "")
+            let noTerms = line.replacingOccurrences(of: "\u{27E6}", with: "").replacingOccurrences(of: "\u{27E7}", with: "")
+            let (clean, breaks) = extractCaptionBreaks(noTerms)
+            segBreaks.append(breaks)
+            return clean
         }
 
-        let newSegs = zip(segs, corrected).map { TranscriptionSegment(text: $1, start: $0.start, end: $0.end) }
+        let newSegs = zip(segs, corrected).enumerated().map { i, pair in
+            TranscriptionSegment(text: pair.1, start: pair.0.start, end: pair.0.end, captionBreaks: segBreaks[i])
+        }
         // With the source audio we can re-time words the recognizer never emitted (a recovered HDMI 2.1 / a
         // dropped syllable) onto energy peaks, so they land on the timeline instead of only in the segment text.
         let envelope: AudioEnvelope? = url == nil ? nil : (try? await AudioEnvelopeExtractor.extract(from: url!))
@@ -117,6 +127,21 @@ enum TranscriptCorrector {
         }
         return (TranscriptionResult(text: corrected.joined(separator: " "), language: result.language,
                                     words: newWords, segments: newSegs, atomicTerms: Array(atomicTerms)), true, changes)
+    }
+
+    /// Splits the ¦ caption-break hints out of a corrected line: returns the clean text (markers removed)
+    /// and the UNIT indices (CJK char / Latin run, punctuation ignored) AFTER which the caption should break.
+    private static func extractCaptionBreaks(_ line: String) -> (text: String, breaks: [Int]) {
+        var clean = "", breaks: [Int] = []
+        for ch in line {
+            if ch == "¦" {
+                let u = CaptionBuilder.units(clean, keepPunctuation: false).count
+                if u > 0, breaks.last != u { breaks.append(u) }
+            } else {
+                clean.append(ch)
+            }
+        }
+        return (clean.trimmingCharacters(in: .whitespaces), breaks)
     }
 
     /// Multi-character substrings the LLM wrapped in ⟦ ⟧ on one line.

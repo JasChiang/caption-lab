@@ -13,6 +13,10 @@ struct TranscriptionSegment: Sendable, Codable {
     let text: String
     let start: Double
     let end: Double
+    /// Unit indices (CJK char / Latin run, punctuation ignored) AFTER which the on-video caption should
+    /// break, suggested by the correction LLM in the same call (semantic, style-agnostic breaks that a
+    /// punctuation/pause heuristic can't match). Empty when unavailable — callers fall back to punctuation.
+    var captionBreaks: [Int] = []
 }
 
 struct TranscriptionResult: Sendable, Codable {

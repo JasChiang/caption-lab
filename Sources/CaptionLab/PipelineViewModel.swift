@@ -128,32 +128,71 @@ final class PipelineViewModel {
     /// A displayable caption phrase on the GLOBAL raw-time axis.
     struct CaptionLine: Equatable { let start: Double; let end: Double; let text: String }
 
-    /// Group each clip's (corrected) words into short caption lines for the on-video overlay: break at a
-    /// sentence/clause punctuation mark, a noticeable pause, or a max length. Times are global raw seconds
-    /// (rawOffset + word time), the same axis as `currentTime`.
+    /// Caption lines for the on-video overlay. The per-word track is punctuation-STRIPPED, so it can't tell
+    /// where sentences end. Instead we break each corrected SEGMENT's display units at the LLM's ¦ break
+    /// hints (semantic, style-agnostic) when present, else at punctuation, always capped so no line
+    /// overflows — and map each chunk back onto its words' timings. Times are global raw seconds.
     func captionLines() -> [CaptionLine] {
         var lines: [CaptionLine] = []
         for (idx, clip) in clips.enumerated() {
             let off = rawOffset(of: idx)
-            var group: [TranscriptionWord] = []
-            var prevEnd: Double?
-            func flush() {
-                defer { group = [] }
-                guard let s = group.first?.start, let e = group.last?.end else { return }
-                let text = group.map(\.text).joined().trimmingCharacters(in: .whitespaces)
-                if !text.isEmpty { lines.append(CaptionLine(start: off + s, end: off + e, text: text)) }
+            guard let result = clip.afterRetranscribe ?? clip.corrected else { continue }
+            let words = result.words
+            for seg in result.segments {
+                let segWords = words.filter {
+                    guard let s = $0.start, let e = $0.end else { return false }
+                    let m = (s + e) / 2
+                    return m >= seg.start && m < seg.end
+                }
+                guard !segWords.isEmpty else { continue }
+                let du = CaptionBuilder.units(seg.text, keepPunctuation: true)   // units keep trailing punctuation
+                guard !du.isEmpty else { continue }
+                var s = 0, wi = 0
+                for e in captionStops(du: du, llm: seg.captionBreaks, maxUnits: 16) {
+                    guard e > s else { continue }
+                    let last = (e == du.count)
+                    let n = last ? (segWords.count - wi) : min(e - s, segWords.count - wi)
+                    if n > 0 {
+                        let take = segWords[wi..<wi + n]; wi += n
+                        let text = du[s..<min(e, du.count)].joined().trimmingCharacters(in: .whitespaces)
+                        if let a = take.first?.start, let b = take.last?.end, !text.isEmpty {
+                            lines.append(CaptionLine(start: off + a, end: off + b, text: text))
+                        }
+                    }
+                    s = e
+                }
             }
-            for w in clip.words {
-                guard let s = w.start, w.end != nil else { continue }
-                if let pe = prevEnd, s - pe > 0.6 { flush() }
-                group.append(w)
-                let endsClause = w.text.last.map { "。．，、！？!?…".contains($0) } ?? false
-                if endsClause || group.map(\.text).joined().count >= 14 { flush() }
-                prevEnd = w.end
-            }
-            flush()
         }
         return lines
+    }
+
+    /// Unit indices to break AFTER (the list always ends at `du.count`): the LLM's ¦ hints when present, else
+    /// punctuation-derived, then extra breaks inserted so no chunk exceeds `maxUnits` (preferring a comma).
+    private func captionStops(du: [String], llm: [Int], maxUnits: Int) -> [Int] {
+        var brk = Set<Int>()
+        if !llm.isEmpty {
+            for b in llm where b > 0 && b < du.count { brk.insert(b) }
+        } else {
+            var since = 0
+            for (i, u) in du.enumerated() where i < du.count - 1 {
+                since += 1
+                let hard = u.contains { "。！？!?…".contains($0) }
+                let soft = u.contains { "，、；：,;".contains($0) }
+                if hard || (soft && since >= 8) { brk.insert(i + 1); since = 0 }
+            }
+        }
+        let stops = [0] + brk.sorted() + [du.count]
+        for k in 0..<(stops.count - 1) {
+            var s = stops[k]
+            let e = stops[k + 1]
+            while e - s > maxUnits {
+                let hardCut = s + maxUnits
+                let cut = (stride(from: min(e - 1, hardCut), through: s + maxUnits / 2, by: -1)
+                    .first { du[$0 - 1].contains { "，、；：,;".contains($0) } }) ?? hardCut
+                brk.insert(cut); s = cut
+            }
+        }
+        return brk.sorted() + [du.count]
     }
 
     /// Caption text to overlay at the current playhead (global raw time), or "" when between lines.
