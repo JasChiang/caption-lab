@@ -34,7 +34,7 @@ enum CutStutters {
 
     static func plan(
         words: [TranscriptionWord], fps: Double,
-        aggressiveness: CutAggressiveness, detector: Detector
+        aggressiveness: CutAggressiveness, detector: Detector, url: URL? = nil
     ) async -> Result {
         var llmFellBack = false
         var mode = detector
@@ -72,8 +72,16 @@ enum CutStutters {
             words: plannerWords, clipStart: clipStart, clipEnd: clipEnd, keepGapFrames: keepGapFrames)
 
         // Frames → seconds for display + "seconds saved".
-        let rangesSeconds = ranges.map { (Double($0.start) / fps)...(Double($0.end) / fps) }
-        let secondsSaved = ranges.reduce(0.0) { $0 + Double($1.length) / fps }
+        var rangesSeconds = ranges.map { (Double($0.start) / fps)...(Double($0.end) / fps) }
+        // Word timings come from the recognizer, whose boundaries sit ON the syllable rather than in the
+        // silence around it — so a frame-snapped cut can slice mid-syllable and leave an audible fragment
+        // ("去去去" cut but the first 去's onset survives). Nudge each boundary to the quietest instant in a
+        // small window so the splice lands in a natural pause. Forced-alignment (Qwen) boundaries were worse
+        // here (zero-width tokens + gaps), so we refine the ASR boundaries acoustically instead.
+        if let url, let env = try? await AudioEnvelopeExtractor.extract(from: url) {
+            rangesSeconds = snapToValleys(rangesSeconds, envelope: env)
+        }
+        let secondsSaved = rangesSeconds.reduce(0.0) { $0 + ($1.upperBound - $1.lowerBound) }
 
         let kept = words.enumerated().filter { !cutSet.contains($0.offset) }.map(\.element)
         let cut = words.enumerated().filter { cutSet.contains($0.offset) }.map(\.element)
@@ -120,6 +128,36 @@ enum CutStutters {
 
     /// Heuristic fallback (`--cut-heuristic`): mark consecutive duplicate words (same normalized text)
     /// except the LAST in each run, plus any word in `defaultFillers`.
+    /// Nudge each cut boundary to the lowest-energy (quietest) instant within ±`maxShift` seconds, so the
+    /// splice lands in a pause instead of through a syllable. The window is deliberately tiny so a cut can
+    /// never grow into a neighbouring KEPT syllable; if snapping ever inverts a range it is left untouched.
+    /// Snapped ranges can touch, so overlaps are merged to keep the ripple clean.
+    static func snapToValleys(_ ranges: [ClosedRange<Double>], envelope env: AudioEnvelope,
+                              maxShift: Double = 0.07) -> [ClosedRange<Double>] {
+        let hop = env.hopSeconds, s = env.samples
+        guard hop > 0, s.count > 2 else { return ranges }
+        func snap(_ t: Double) -> Double {
+            let center = max(0, min(s.count - 1, Int((t / hop).rounded())))
+            let w = max(1, Int((maxShift / hop).rounded()))
+            let lo = max(0, center - w), hi = min(s.count - 1, center + w)
+            var bestI = center, bestE = s[center]
+            for i in lo...hi where s[i] < bestE { bestE = s[i]; bestI = i }
+            return Double(bestI) * hop
+        }
+        let snapped = ranges.map { r -> ClosedRange<Double> in
+            let a = snap(r.lowerBound), b = snap(r.upperBound)
+            return b > a ? a...b : r
+        }
+        let sorted = snapped.sorted { $0.lowerBound < $1.lowerBound }
+        var merged: [ClosedRange<Double>] = []
+        for r in sorted {
+            if let last = merged.last, r.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound...max(last.upperBound, r.upperBound)
+            } else { merged.append(r) }
+        }
+        return merged
+    }
+
     static func heuristicCutIndices(words: [TranscriptionWord], fillers: Set<String> = defaultFillers) -> [Int] {
         func norm(_ s: String) -> String { s.lowercased().trimmingCharacters(in: CharacterSet.alphanumerics.inverted) }
         var cut: [Int] = []
