@@ -12,21 +12,30 @@ enum MediaDescriber {
         url: URL, language: String, model: String = GeminiClient.defaultModel
     ) async throws -> (label: String?, segments: [ContentSegment], usage: GeminiClient.Usage) {
         let prompt = """
-        Watch this entire video and break it into its distinct shots/segments in order. For EACH segment \
-        output ONE line EXACTLY as:
+        Watch this entire video and produce a VERBATIM, time-stamped transcript of everything spoken, in order. \
+        Output ONE line per block, EXACTLY as:
         [MM:SS-MM:SS] <speaker> | <visual> | <dialogue>
-        where <speaker> identifies WHO is speaking in that segment — use a SHORT, CONSISTENT label for each \
-        person across the WHOLE video (e.g. 主持人, 來賓, 旁白, or their name if it is stated), and reuse the \
-        exact same label every time that person speaks; use - if no one is speaking. <visual> is a concrete \
-        description in \(language) (subjects, action, setting). <dialogue> is the key spoken words / on-screen \
-        narration in that segment in \(language), or - if none. \
-        Cover the WHOLE video. After all segments, output one final line:
+        Rules:
+        • Break continuous speech into SHORT blocks — start a new block every 3–7 seconds, or at a natural \
+        pause, a significant comma, or the end of a clause. NEVER let one block span a long stretch of talking \
+        or summarize several sentences into one line.
+        • <dialogue> is a VERBATIM transcription of what is said in this block — EVERY word exactly as spoken, \
+        including fillers (呃/um) and stutters, in the ORIGINAL language. Replicate mixed-language speech \
+        exactly (e.g. "這個 feature 很酷"). DO NOT translate, summarize, paraphrase, or clean it up. Use - only \
+        when truly no one is speaking.
+        • <speaker> is a SHORT, CONSISTENT label for each person across the WHOLE video (e.g. 主持人, 來賓, 旁白, \
+        or their name if stated); reuse the exact same label every time that person speaks; use - if no speech.
+        • <visual> is a brief note on what is on screen in \(language) (subjects, action, setting), or - if it \
+        is unchanged from the previous block.
+        Transcribe the WHOLE video with no gaps. Do NOT include non-speech events like [笑聲]/[Laughter]. \
+        After all blocks, output one final line:
         SUMMARY: <one sentence describing the whole clip in \(language)>
         No preamble, no markdown, no extra lines.
         """
-        // A long clip yields many segment lines plus the trailing SUMMARY; a tight cap truncates it.
-        // Gemini File API uploads the local clip directly (no fal CDN hop); low-res keeps it cheap.
-        let r = try await GeminiClient.describeVideo(fileURL: url, prompt: prompt, model: model, maxTokens: 8000, lowRes: true)
+        // Verbatim short blocks are far longer than a shot summary, so cap at the model's full output limit
+        // (65536 for flash / flash-lite / pro, verified via the models API) to avoid truncating a long clip's
+        // transcript mid-way. Gemini File API uploads the local clip directly; low-res keeps it cheap.
+        let r = try await GeminiClient.describeVideo(fileURL: url, prompt: prompt, model: model, maxTokens: 65536, lowRes: true)
         let parsed = parseContentMap(r.text)
         return (parsed.label, parsed.segments, r.usage)
     }

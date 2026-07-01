@@ -65,6 +65,14 @@ Branch: `caption-pipeline-improvements` (off `main`).
      finance / poetry). Markers are stripped and never counted, so count-lock is unchanged.
    - Decision: pause-based breaking was rejected — hesitation pauses in interviews fire false breaks and it's
      speed-dependent (not universal). Semantic LLM breaks are the one method that generalises.
+7. **Verbatim content map** (`MediaDescriber` prompt)
+   - The content-map dialogue is the REFERENCE the correction stage compares against, so it must be verbatim.
+     The old prompt asked for "key spoken words" per visual shot → on a single-shot podcast (財經節目E) Gemini
+     returned ONE 438-char summary block. New prompt demands a VERBATIM, original-language transcript broken
+     into short 3–7 s blocks (no summarizing/translating; keep fillers, stutters, code-mixing). Result on the
+     same clip: 1 block → 16 short verbatim blocks (avg 26 chars), speaker resolved to the real name (主持人E).
+   - `maxTokens` for this call raised to 65536 (the flash/pro/flash-lite output limit, verified via models API)
+     so a long clip's verbatim transcript isn't truncated.
 
 ### Validation — 5 clips, all timing drift 0, PASS
 | clip | type | swapped | highlight |
