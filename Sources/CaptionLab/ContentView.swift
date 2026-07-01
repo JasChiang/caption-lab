@@ -101,7 +101,7 @@ struct ContentView: View {
 
     private var playerAndControls: some View {
         VStack(spacing: Theme.Space.sm) {
-            VideoPlayer(player: vm.player)
+            AVPlayerViewRepresentable(player: vm.player)
                 .frame(minHeight: 240)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.stroke))
@@ -150,4 +150,24 @@ final class URLCollector: @unchecked Sendable {
 func tc(_ s: Double) -> String {
     guard s.isFinite, s >= 0 else { return "0:00" }
     return String(format: "%d:%05.2f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60))
+}
+
+// Wraps AppKit's AVPlayerView directly instead of SwiftUI's `VideoPlayer`.
+// SwiftUI's `VideoPlayer` (module _AVKit_SwiftUI) crashes on the Xcode 27 beta
+// toolchain: the runtime fails to demangle the AVPlayerView (`So12AVPlayerViewC`)
+// superclass metadata and aborts. This representable is behavior-equivalent.
+struct AVPlayerViewRepresentable: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player { nsView.player = player }
+    }
 }
