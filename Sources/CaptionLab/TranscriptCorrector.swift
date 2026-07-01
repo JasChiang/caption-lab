@@ -12,11 +12,29 @@ enum TranscriptCorrector {
     /// Returns the corrected result and whether the LLM cleanup actually succeeded. `corrected == false`
     /// means every attempt failed and the caller is getting the RAW transcript back — surface that, don't
     /// pretend it was cleaned.
-    static func correct(_ result: TranscriptionResult, model: String = GeminiClient.defaultModel, glossary: [String] = []) async -> (result: TranscriptionResult, corrected: Bool, changes: [(from: String, to: String)]) {
+    static func correct(_ result: TranscriptionResult, model: String = GeminiClient.defaultModel,
+                        glossary: [String] = [], contentSegments: [ContentSegment] = []) async
+        -> (result: TranscriptionResult, corrected: Bool, changes: [(from: String, to: String)]) {
         let segs = result.segments
         guard !segs.isEmpty else { return (result, true, []) }
 
-        let numbered = segs.enumerated().map { "\($0 + 1). \($1.text)" }.joined(separator: "\n")
+        // A per-line REFERENCE from the content map — a second, video-grounded transcription of the same
+        // audio. It lets correction fix soundalike errors that have NO textual cue (ASR 說得很很一樣 while the
+        // map heard 說得很很遺憾): the recognizer's word is plausible on its own, so only a second opinion on
+        // the audio can catch it.
+        func mapRef(_ seg: TranscriptionSegment) -> String? {
+            let d = contentSegments
+                .filter { $0.startSeconds < seg.end && $0.endSeconds > seg.start }
+                .compactMap { $0.dialogue?.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            return d.isEmpty ? nil : d
+        }
+        let hasRefs = contentSegments.contains { ($0.dialogue?.isEmpty == false) }
+        let numbered = segs.enumerated().map { i, s -> String in
+            if let ref = mapRef(s) { return "\(i + 1). \(s.text)\n   REFERENCE: \(ref)" }
+            return "\(i + 1). \(s.text)"
+        }.joined(separator: "\n")
         // Project glossary: names/brands/jargon the recognizer mangles. Spell them EXACTLY as given and
         // prefer them over a same-sounding common word — the surest fix for proper nouns out of context.
         let terms = glossary.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -24,12 +42,21 @@ enum TranscriptCorrector {
          These names/terms appear in this project — spell them EXACTLY like this and prefer them over a \
         same-sounding ordinary word: \(terms.joined(separator: ", ")).
         """
+        let referenceRule = !hasRefs ? "" : """
+         Some lines carry a REFERENCE: an independent transcription of the SAME audio by a video-understanding \
+        model. Treat it as a strong second opinion for soundalike errors that have no textual cue — when the \
+        line and its REFERENCE disagree on a word and the REFERENCE reads more naturally in context, PREFER \
+        the REFERENCE's word (e.g. a line reads 反應 where the REFERENCE clearly says 反映 → use 反映). But the REFERENCE is \
+        NOT authoritative on disfluency: it routinely drops stutters and false starts, so never delete a \
+        repeat to match it — keep every 去去去 / 進進 from the line. Swap a word only where line and REFERENCE \
+        clearly describe the same syllable(s); never import extra wording the line does not support.
+        """
         let system = """
         You clean up raw speech-to-text transcripts. For each numbered line, fix whatever the \
         recognizer got wrong, using context: characters or words it misheard — including \
         same-sounding (homophone / soundalike) substitutions in ANY language, which are especially common \
         in Chinese (e.g. 試用→使用, 帳號 not 賬號; English their/there) — plus misspellings, wrong word \
-        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(glossaryRule) Add natural punctuation, \
+        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(glossaryRule)\(referenceRule) Add natural punctuation, \
         using the language's OWN quotation marks (Chinese / Japanese 「…」 with 『…』 nested; never ASCII ' or "), \
         so a caption never strands a stray quote. Do NOT \
         paraphrase, rewrite, translate, summarize, reorder, or change the speaker's wording or meaning \
@@ -119,12 +146,66 @@ enum TranscriptCorrector {
                 return mid >= s.start && mid < s.end
             }
             let units = CaptionBuilder.units(corrected[i], keepPunctuation: false)
-            guard !units.isEmpty, units.count == wordIdxs.count else { continue }
-            for (j, wi) in wordIdxs.enumerated() {
-                newWords[wi] = TranscriptionWord(text: units[j], start: newWords[wi].start, end: newWords[wi].end)
+            guard !units.isEmpty, !wordIdxs.isEmpty else { continue }
+            // Fast path: whole segment lines up 1:1 → swap every word (cheapest, unchanged behavior).
+            if units.count == wordIdxs.count {
+                for (j, wi) in wordIdxs.enumerated() {
+                    newWords[wi] = TranscriptionWord(text: units[j], start: newWords[wi].start, end: newWords[wi].end)
+                }
+                continue
+            }
+            // Granular path: the segment's unit count drifted (a stutter merged, a syllable added). Instead of
+            // skipping the WHOLE segment — which threw away easy same-position fixes like 整年檢壓→正念減壓 just
+            // because one unit elsewhere didn't line up — align ASR units to corrected units by LCS and swap
+            // only where the mapping is unambiguous (matched anchors + equal-length substitution runs between
+            // them). Insertions/deletions are left as raw ASR: this stage never re-times, so a genuinely added
+            // syllable is left for the energy-peak re-timing in the retranscribe stage.
+            let asrUnits = wordIdxs.map { newWords[$0].text }
+            for (aj, text) in alignedPositionalSwaps(a: asrUnits, b: units) {
+                let wi = wordIdxs[aj]
+                newWords[wi] = TranscriptionWord(text: text, start: newWords[wi].start, end: newWords[wi].end)
             }
         }
         return newWords
+    }
+
+    /// Aligns ASR units `a` to corrected units `b` and returns, per index of `a`, the corrected text it
+    /// should take — but ONLY where the mapping is safe: LCS-matched positions, plus runs between matches
+    /// whose ASR and corrected lengths are equal (a pure substitution like 金→親 / 賭→讀 maps 1:1, keeping
+    /// that word's original timing). Unequal runs (an inserted or dropped syllable) are omitted, so those
+    /// ASR words keep their own text rather than smearing corrected text across mistimed slots.
+    static func alignedPositionalSwaps(a: [String], b: [String]) -> [Int: String] {
+        let n = a.count, m = b.count
+        guard n > 0, m > 0 else { return [:] }
+        // LCS length table (suffix DP).
+        var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                dp[i][j] = a[i] == b[j] ? dp[i + 1][j + 1] + 1 : max(dp[i + 1][j], dp[i][j + 1])
+            }
+        }
+        // Backtrack the matched (ai, bj) anchor pairs.
+        var matches: [(Int, Int)] = []
+        var i = 0, j = 0
+        while i < n, j < m {
+            if a[i] == b[j] { matches.append((i, j)); i += 1; j += 1 }
+            else if dp[i + 1][j] >= dp[i][j + 1] { i += 1 }
+            else { j += 1 }
+        }
+        var out: [Int: String] = [:]
+        var prevA = -1, prevB = -1
+        func fillEqualGap(aEnd: Int, bEnd: Int) {
+            let aLen = aEnd - (prevA + 1), bLen = bEnd - (prevB + 1)
+            guard aLen > 0, aLen == bLen else { return }
+            for k in 0..<aLen { out[prevA + 1 + k] = b[prevB + 1 + k] }
+        }
+        for (ai, bj) in matches {
+            fillEqualGap(aEnd: ai, bEnd: bj)   // equal-length substitution run before this anchor
+            out[ai] = b[bj]                    // the matched unit (identical text; keeps timing)
+            prevA = ai; prevB = bj
+        }
+        fillEqualGap(aEnd: n, bEnd: m)         // trailing run after the last anchor
+        return out
     }
 
 }

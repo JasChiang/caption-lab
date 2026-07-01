@@ -312,7 +312,8 @@ final class PipelineViewModel {
 
         // [4] Correction
         clip.mark(4, .running)
-        let corr = await TranscriptCorrector.correct(asr, model: model, glossary: clip.effectiveGlossary)
+        let corr = await TranscriptCorrector.correct(asr, model: model, glossary: clip.effectiveGlossary,
+                                                     contentSegments: clip.contentSegments)
         clip.correctionSucceeded = corr.corrected
         clip.diffChanges = corr.changes.map { DiffChange(from: $0.from, to: $0.to) }
         clip.atomicTerms = corr.result.atomicTerms
@@ -337,7 +338,7 @@ final class PipelineViewModel {
         // [6] Cut stutters (per clip; WordCutPlanner runs within this clip's own frame span)
         clip.mark(6, .running)
         clip.cut = await CutStutters.plan(words: working.words, fps: clip.fps,
-                                          aggressiveness: aggressiveness, detector: cutDetector)
+                                          aggressiveness: aggressiveness, detector: cutDetector, url: clip.url)
         clip.mark(6, .done)
 
         // [7] Timing-preservation check

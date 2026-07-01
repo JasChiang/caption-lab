@@ -117,8 +117,10 @@ enum CLIRunner {
             print("\(r.segments.count) segment(s) · \(r.usage.summary)\n")
             for seg in r.segments {
                 print("  [\(mmss(seg.startSeconds))–\(mmss(seg.endSeconds))] \(seg.visual)")
-                if let d = seg.dialogue, !d.isEmpty { print("      dialogue: \(d)") }
+                if let d = seg.dialogue, !d.isEmpty { print("      \(seg.speaker.map { "[\($0)] " } ?? "")dialogue: \(d)") }
             }
+            let speakers = Array(Set(r.segments.compactMap(\.speaker))).sorted()
+            if !speakers.isEmpty { print("\nSpeakers detected: \(speakers.joined(separator: ", "))") }
             dump(r.segments, "contentmap.json")
         } catch { print("Content map failed: \(error.localizedDescription)") }
 
@@ -153,7 +155,8 @@ enum CLIRunner {
 
         // [4] Correction
         header(4, "TEXT CORRECTION (Gemini, 1:1 segment writeback)")
-        let corr = await TranscriptCorrector.correct(asr, model: model, glossary: glossary)
+        let corr = await TranscriptCorrector.correct(asr, model: model, glossary: glossary,
+                                                     contentSegments: contentSegments)
         if !corr.corrected { print("Correction FAILED — using RAW transcript.") }
         print("changed segments: \(corr.changes.count)")
         for c in corr.changes { print("  BEFORE: \(c.from)\n  AFTER : \(c.to)\n") }
@@ -178,7 +181,8 @@ enum CLIRunner {
         // [6] Cut stutters / disfluencies
         header(6, "CUT STUTTERS / DISFLUENCIES (WordCutPlanner)")
         let cut = await CutStutters.plan(words: working.words, fps: fps,
-                                         aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .llm)
+                                         aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .llm,
+                                         url: mediaURL)
         if cut.llmFellBack { print("(LLM cut detector failed — fell back to heuristic.)") }
         print("detector=\(cut.mode.rawValue)  fps=\(String(format: "%.3f", fps))  cut \(cut.cutWords.count) word(s) → \(String(format: "%.2f", cut.secondsSaved))s removed across \(cut.cutRangesSeconds.count) range(s)")
         for (idx, w) in zip(cut.cutIndices, cut.cutWords) {
