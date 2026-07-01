@@ -50,6 +50,30 @@ Branch: `caption-pipeline-improvements` (off `main`).
      dialogue as a REFERENCE. Correction prefers it for soundalike errors with no textual cue (一樣→遺憾),
      while keeping stutters (the map drops them — the prompt forbids collapsing repeats). This is the
      "Apple gives timing, Gemini gives the correct words, backfill" architecture the user asked for.
+   - **Re-time recovered inserted words** (`rebuildSegment` + `alignBlocks`, envelope threaded via `url`):
+     when the map recovers words the recognizer never emitted (Chinese speech that dropped the English
+     "HDMI 2.1"), correction now places those units on syllable energy peaks (`placeOnEnergyPeaks`) so they
+     appear on the word timeline / on-video caption, not just in the segment text. The timing-preservation
+     self-check still calls `applyCorrectedText` WITHOUT an envelope, so it stays a 1:1 count check.
+5. **On-video caption overlay** (`PipelineViewModel.captionLines`/`currentCaption`, `ContentView`)
+   - Groups the corrected words into short lines (break at clause punctuation / pause / max length) on the
+     global raw-time axis and overlays the current line on the video player, synced to `currentTime`.
+
+### Validation — 5 clips, all timing drift 0, PASS
+| clip | type | swapped | highlight |
+|---|---|---|---|
+| 受訪者A | interview / disfluent | 8–12/255 | 整年檢壓→正念減壓 |
+| 講者B | domain jargon | 31/261 | 幹細胞 / 粒線體 / 分泌 / 某大獎得主 |
+| 朗讀者C | clean poetry | **3/91** | 願→月; barely changes clean audio (no over-correction) |
+| 評測頻道D (評測頻道D) | tech jargon + code-switch | 31/260 | HDR10 / RGB LED; **HDMI 2.1 recovered onto timeline** |
+| 財經節目E (showE) | finance + code-switch, fast | 13/383 | 某台語俗諺 (idiom); AI kept |
+- Overfit check passed: the aggressive map-reference makes FEW changes on clean audio (朗讀者C: 3) and correct
+  changes on jargon — it generalised to domains it was never tuned on. Prompt example genericised (反應/反映).
+- Apple ASR granularity confirmed: CJK is per-character (1 char ≈ 1 syllable ≈ 1 token); Latin/English is a
+  whole-token unit and is often mangled or dropped (single locale `zh-TW`, no code-switching) — which is
+  exactly why the multilingual content-map reference is worth so much.
+- Test clips live in `~/Desktop/pp-test/` (not in git): `clean_朗讀者C.mp4`, `jargon_評測頻道D.mp4`, `finance_財經節目E.mp4`
+  (60s slices via `yt-dlp --download-sections`), plus the original `受訪者A…`, `講者B…`.
 
 ### Key findings / decisions
 - **Qwen forced-aligner timing is unreliable** on real clips: ~10% zero-width tokens + many gaps vs Apple's
@@ -67,9 +91,12 @@ Branch: `caption-pipeline-improvements` (off `main`).
 ### Open / next steps
 - **Long-term overfit watch**: the "prefer the map" rule COULD trade an ASR-correct word for a map-wrong one.
   2 clips showed only improvements, but validate on more, varied clips; consider logging map-swap accuracy.
+- **Tighten inserted-word timing**: recovered insertions (HDMI 2.1) are placed on energy peaks within the
+  span of the single ASR word they replaced, so they can be cramped (~40 ms each). Expand the placement span
+  into the neighbouring silence gap for more natural timing.
 - **Manual-edit re-timing** (user idea): when a human fixes text both ASR and map missed, re-time that span
-  with the existing `placeOnEnergyPeaks` (1 CJK char ≈ 1 energy peak). Infra already exists in the retranscribe
-  path; would need a GUI "edit caption line → re-time span" hook.
+  with the existing `placeOnEnergyPeaks` (1 CJK char ≈ 1 energy peak) — the same path `rebuildSegment` now
+  uses for map-recovered insertions. Would need a GUI "edit caption line → re-time span" hook.
 - **Export cut video** (deferred — preview via "Joined + cuts" is enough for now): ffmpeg `select/aselect +
   concat` to render the ripple cut. Also considered: `silencedetect` (sturdier than our RMS valley),
   `afftdn`/`loudnorm` denoise+normalize before ASR to reduce recognition errors at the source.
