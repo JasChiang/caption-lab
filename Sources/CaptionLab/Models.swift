@@ -77,4 +77,9 @@ struct ContentSegment: Codable, Sendable, Equatable {
     var endSeconds: Double
     var visual: String
     var dialogue: String?
+    /// Who is speaking in this segment — a short, consistent label per person across the clip (主持人 /
+    /// 來賓 / a name), or nil when there's no speech. Gemini already distinguishes speakers when it writes
+    /// the content map; this captures that as structured data instead of burying it in `visual`. Optional
+    /// with a default so older dumps (no speaker) still decode and existing constructions still compile.
+    var speaker: String? = nil
 }

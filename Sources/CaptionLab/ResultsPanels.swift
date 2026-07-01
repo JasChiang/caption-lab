@@ -95,7 +95,14 @@ struct ResultsPanels: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text("[\(tc(seg.startSeconds))–\(tc(seg.endSeconds))] \(seg.visual)")
                                 .font(Theme.mono(10)).foregroundStyle(Theme.dim)
-                            if let d = seg.dialogue { Text(d).font(Theme.mono(10)).foregroundStyle(Theme.text.opacity(0.8)) }
+                            if let d = seg.dialogue {
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                                    if let sp = seg.speaker {
+                                        Text(sp).font(Theme.mono(10, .medium)).foregroundStyle(Theme.accent)
+                                    }
+                                    Text(d).font(Theme.mono(10)).foregroundStyle(Theme.text.opacity(0.8))
+                                }
+                            }
                         }
                     }
                 }

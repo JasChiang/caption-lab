@@ -14,9 +14,12 @@ enum MediaDescriber {
         let prompt = """
         Watch this entire video and break it into its distinct shots/segments in order. For EACH segment \
         output ONE line EXACTLY as:
-        [MM:SS-MM:SS] <visual> | <dialogue>
-        where <visual> is a concrete description in \(language) (subjects, action, setting) and <dialogue> \
-        is the key spoken words / on-screen narration in that segment in \(language), or - if none. \
+        [MM:SS-MM:SS] <speaker> | <visual> | <dialogue>
+        where <speaker> identifies WHO is speaking in that segment — use a SHORT, CONSISTENT label for each \
+        person across the WHOLE video (e.g. 主持人, 來賓, 旁白, or their name if it is stated), and reuse the \
+        exact same label every time that person speaks; use - if no one is speaking. <visual> is a concrete \
+        description in \(language) (subjects, action, setting). <dialogue> is the key spoken words / on-screen \
+        narration in that segment in \(language), or - if none. \
         Cover the WHOLE video. After all segments, output one final line:
         SUMMARY: <one sentence describing the whole clip in \(language)>
         No preamble, no markdown, no extra lines.
@@ -43,10 +46,20 @@ enum MediaDescriber {
             let rest = line[line.index(after: close)...].trimmingCharacters(in: .whitespaces)
             let parts = range.split(separator: "-", maxSplits: 1).map { secondsFromMMSS(String($0)) }
             guard parts.count == 2, let s = parts[0], let e = parts[1] else { continue }
-            let halves = rest.split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            let visual = halves.first ?? ""
-            let dialogue = halves.count > 1 && halves[1] != "-" && !halves[1].isEmpty ? halves[1] : nil
-            if !visual.isEmpty { segments.append(ContentSegment(startSeconds: s, endSeconds: max(e, s), visual: visual, dialogue: dialogue)) }
+            // New format is `<speaker> | <visual> | <dialogue>`; tolerate the old 2-field `<visual> | <dialogue>`
+            // (speaker nil) so a model that ignores the speaker field still parses.
+            let halves = rest.split(separator: "|", maxSplits: 2).map { $0.trimmingCharacters(in: .whitespaces) }
+            func clean(_ s: String?) -> String? { (s == nil || s == "-" || s!.isEmpty) ? nil : s }
+            let speaker: String?, visual: String, dialogue: String?
+            if halves.count >= 3 {
+                speaker = clean(halves[0]); visual = halves[1]; dialogue = clean(halves[2])
+            } else {
+                speaker = nil; visual = halves.first ?? ""; dialogue = clean(halves.count > 1 ? halves[1] : nil)
+            }
+            if !visual.isEmpty {
+                segments.append(ContentSegment(startSeconds: s, endSeconds: max(e, s), visual: visual,
+                                               dialogue: dialogue, speaker: speaker))
+            }
         }
         return (label, segments)
     }
