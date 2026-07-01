@@ -13,15 +13,18 @@ import Foundation
 /// heuristic would mostly cry wolf.
 enum AudioQuality {
     struct Report: Sendable, Codable {
-        var clippingFraction: Double     // fraction of samples pinned near full scale
-        var snrDb: Double                // rough speech-to-floor ratio from envelope percentiles
-        var warnings: [String]           // user-facing, empty when the source is clean
+        var clippingFraction: Double              // fraction of samples pinned near full scale
+        var snrDb: Double                         // rough speech-to-floor ratio from envelope percentiles
+        var musicFraction: Double = 0             // fraction dominated by music (Apple SoundAnalysis)
+        var musicRanges: [ClosedRange<Double>] = []
+        var warnings: [String]                    // user-facing, empty when the source is clean
     }
 
     // Tunable thresholds (untuned — validate on real clips).
     private static let clipLevel: Float = 0.98        // |sample| at/above this counts as clipped
     private static let clipWarnFraction = 0.002       // >0.2% clipped → warn
-    private static let lowSNRWarnDb = 12.0            // below this → noisy / music bed
+    private static let lowSNRWarnDb = 12.0            // below this → noisy background
+    private static let musicWarnFraction = 0.15       // >15% music → warn
 
     static func analyze(url: URL) async -> Report? {
         guard let floats = try? await AudioConditioner.readMonoFloats(url: url),
@@ -48,15 +51,27 @@ enum AudioQuality {
         let floor = max(percentile(sorted, 0.10), 1e-6)
         let snrDb = speech > 1e-6 ? Double(20 * log10f(speech / floor)) : 0
 
+        // Apple SoundAnalysis: a trained model that separates background MUSIC from plain noise (which the
+        // SNR proxy can't). Detection only — recognition over music is expected to be worse.
+        let music = await SoundClassifier.detectMusic(url: url)
+
         var warnings: [String] = []
         if clippingFraction > clipWarnFraction {
             warnings.append(String(format: "Clipping: %.1f%% of samples are distorted — a clipped source can't be recovered; use a cleaner take if possible.", clippingFraction * 100))
         }
-        if snrDb < lowSNRWarnDb {
-            warnings.append(String(format: "Low SNR (~%.0f dB) — noisy or music bed. Recognition accuracy will drop; source separation is out of scope.", snrDb))
+        if let music, music.musicFraction > musicWarnFraction {
+            let where_ = music.ranges.prefix(3).map { mmss($0.lowerBound) + "–" + mmss($0.upperBound) }.joined(separator: ", ")
+            warnings.append(String(format: "Background music in %.0f%% of the clip (%@) — recognition drops over music; separation is out of scope.", music.musicFraction * 100, where_))
         }
-        return Report(clippingFraction: clippingFraction, snrDb: snrDb, warnings: warnings)
+        if snrDb < lowSNRWarnDb {
+            warnings.append(String(format: "Low SNR (~%.0f dB) — noisy background; recognition accuracy will drop.", snrDb))
+        }
+        return Report(clippingFraction: clippingFraction, snrDb: snrDb,
+                      musicFraction: music?.musicFraction ?? 0, musicRanges: music?.ranges ?? [],
+                      warnings: warnings)
     }
+
+    private static func mmss(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
 
     private static func percentile(_ sorted: [Float], _ p: Double) -> Float {
         guard !sorted.isEmpty else { return 0 }

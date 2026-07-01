@@ -36,6 +36,7 @@ struct ResultsPanels: View {
                     HStack {
                         pill(String(format: "SNR ~%.0f dB", q.snrDb), q.snrDb < 12 ? Theme.cut : Theme.pass)
                         pill(String(format: "clip %.1f%%", q.clippingFraction * 100), q.clippingFraction > 0.002 ? Theme.fail : Theme.dim)
+                        pill(String(format: "music %.0f%%", q.musicFraction * 100), q.musicFraction > 0.15 ? Theme.cut : Theme.dim)
                         Spacer()
                     }
                     if q.warnings.isEmpty {

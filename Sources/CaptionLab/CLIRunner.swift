@@ -135,7 +135,7 @@ enum CLIRunner {
         // [2] Raw ASR
         header(2, "RAW ASR (Apple SpeechTranscriber)")
         if let q = await AudioQuality.analyze(url: mediaURL) {
-            print(String(format: "audio quality: SNR ~%.0f dB · clipping %.2f%%", q.snrDb, q.clippingFraction * 100))
+            print(String(format: "audio quality: SNR ~%.0f dB · clipping %.2f%% · music %.0f%%", q.snrDb, q.clippingFraction * 100, q.musicFraction * 100))
             for w in q.warnings { print("  ⚠︎ \(w)") }
         }
         let asr: TranscriptionResult

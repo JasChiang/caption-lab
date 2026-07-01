@@ -4,6 +4,43 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-01 (d) — Apple-framework research + SoundAnalysis music detection
+
+Branch: `claude/fast-speech-transcription-7zyzzn`. Researched (Apple docs / WWDC25) which Apple tools help
+the fast/quiet/accuracy goals. Findings + one shippable win.
+
+### Findings (verified against official docs / WWDC25 session 277)
+- **Source-side biasing (contextualStrings / custom vocab)** — NOT usable here. In the new Speech API,
+  `SpeechTranscriber` (what we use) does NOT support `AnalysisContext.contextualStrings`; only
+  `DictationTranscriber` does, and it's dictation-oriented (not built for long recorded clips). Custom
+  vocabulary is unsupported in the new API entirely. Reverting to `SFSpeechRecognizer` for `contextualStrings`
+  is the only path — not worth it: our auto-harvested glossary + content-map REFERENCE already inject those
+  terms into correction with zero manual work.
+- **Voice-processing denoise** (`setVoiceProcessingEnabled`, AEC/NS/AGC) — bound to a live I/O node; offline
+  manual-rendering has no I/O node, so it can't clean a FILE offline. `AUDynamicsProcessor` / `AVAudioUnitEQ`
+  are offline-usable but would only replace our working hand-rolled DSP laterally → skipped.
+- **SFVoiceAnalytics** (voicing/pitch/jitter/shimmer) — old-API only (`SFTranscriptionSegment.voiceAnalytics`);
+  the new `SpeechAnalyzer` doesn't expose it. Not worth reverting for marginal segmentation gain. (If breath-
+  aware segmentation is wanted, do it from our existing energy envelope — no Apple API needed.)
+- **SoundAnalysis** — YES. `SNAudioFileAnalyzer` + `SNClassifySoundRequest(.version1)` runs Apple's built-in
+  ~300-category model OFFLINE; labels include `music`/`speech`/`singing`. This is the one item Apple actually
+  ships a model for.
+
+### New: `SoundClassifier.swift` — real music detection (upgrades the SNR heuristic)
+Runs the built-in classifier over the file, flags windows where `music`/`singing` ≥ 0.5 confidence, merges
+them into spans, returns `musicFraction` + `ranges`. Folded into `AudioQuality`: replaces the vague "noisy or
+music bed" SNR warning with a precise "Background music in X% of the clip (0:MM–0:MM…)". Detection only — it
+separates music from noise, it does NOT separate music from speech (that still needs a separation model).
+Surfaced in the GUI AUDIO QUALITY card (music pill) and CLI stage-2 line.
+
+### Open / next steps
+- **Untested — needs a Mac build.** Test music detection with `jargon_評測頻道D` (produced tech review, likely has
+  intro/background music → expect music% > 0) vs `clean_朗讀者C` (poetry, expect ~0% as a control). Tune
+  `musicThreshold` (0.5) / `musicWarnFraction` (15%).
+- SoundAnalysis adds a 3rd audio read at clip-add (floats + envelope + classifier); fine for a lab tool.
+
+---
+
 ## Session 2026-07-01 (c) — signal-quality warnings + code-switching
 
 Branch: `claude/fast-speech-transcription-7zyzzn`.
