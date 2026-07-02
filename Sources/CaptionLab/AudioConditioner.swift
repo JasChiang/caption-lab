@@ -15,7 +15,11 @@ import Foundation
 struct AudioConditioning: Sendable, Equatable {
     var normalize: Bool = true
     var denoise: Bool = false
-    var slowFastSpeech: Bool = true
+    /// Default OFF: A/B on real clips (2026-07-02) showed mild slow-down (0.86×) swaps errors rather than
+    /// reducing them — time-stretch smears consonant transients (幹→趕), and the recognizer is trained on
+    /// natural-rate speech. Net ≈ 0 at +25% ASR time. Keep as an opt-in experiment for genuinely extreme
+    /// fast speech; normalize (harmless, sometimes recovers quiet syllables) stays on.
+    var slowFastSpeech: Bool = false
 
     // Normalization / compression tuning.
     var targetPeak: Float = 0.89              // ≈ -1 dBFS write ceiling

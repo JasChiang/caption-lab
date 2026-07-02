@@ -10,7 +10,8 @@ enum CLIRunner {
     Options:
       --glossary term1,term2   Extra glossary terms (merged with content-map-harvested terms).
       --no-normalize           Disable pre-ASR normalize + compression (default: on; helps quiet speech).
-      --no-slow-fast           Disable pre-ASR auto slow-down of fast speech (default: on).
+      --slow-fast              Enable pre-ASR auto slow-down of fast speech (default: OFF — A/B showed it
+                               swaps errors, not reduces them; opt-in for extreme fast speech only).
       --denoise                Enable pre-ASR light denoise (high-pass + gentle gate; default: off).
       --ab-conditioning        Run ASR twice (conditioning ON vs OFF) and print both transcripts to compare.
       --no-retranscribe        Skip stage 5 (Gemini-audio re-transcription of suspect spans).
@@ -66,7 +67,8 @@ enum CLIRunner {
             switch a {
             case "--glossary": i += 1; if i < args.count { glossaryArg = args[i].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
             case "--no-normalize": conditioning.normalize = false
-            case "--no-slow-fast": conditioning.slowFastSpeech = false
+            case "--slow-fast": conditioning.slowFastSpeech = true
+            case "--no-slow-fast": conditioning.slowFastSpeech = false   // kept for script compat
             case "--denoise": conditioning.denoise = true
             case "--ab-conditioning": abConditioning = true
             case "--audio-check": audioCheckOnly = true

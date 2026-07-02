@@ -30,11 +30,11 @@ struct ControlsPanel: View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 Toggle("Normalize + compress (quiet / fading speakers)", isOn: $vm.conditioning.normalize)
                     .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
-                Toggle("Slow fast speech before ASR (auto)", isOn: $vm.conditioning.slowFastSpeech)
+                Toggle("Slow fast speech before ASR (experimental)", isOn: $vm.conditioning.slowFastSpeech)
                     .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
                 Toggle("Denoise (high-pass + gentle gate)", isOn: $vm.conditioning.denoise)
                     .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
-                Text("Normalize lifts a quiet talker and the trailing 的/了/嗎 a fading voice drops. Slow-down only fires when the syllable rate is genuinely fast, then maps timings back — normal-paced clips are untouched.")
+                Text("Normalize lifts a quiet talker and the trailing 的/了/嗎 a fading voice drops; harmless on clean audio. Slow-down is OFF by default — A/B showed time-stretch smears consonant onsets (幹→趕) and swaps errors instead of reducing them; try it only on genuinely extreme fast speech.")
                     .font(Theme.ui(10)).foregroundStyle(Theme.faint)
             }
 
