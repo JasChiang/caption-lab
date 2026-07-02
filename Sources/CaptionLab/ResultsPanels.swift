@@ -32,8 +32,9 @@ struct ResultsPanels: View {
 
     @ViewBuilder private func runningStatus(_ clip: ClipModel) -> some View {
         if let s = clip.runningStage {
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                let elapsed = s.startedAt.map { max(0, Int(ctx.date.timeIntervalSince($0))) } ?? 0
+            // SwiftUI.TimelineView explicitly — this module defines its own `TimelineView` (the waveform view).
+            SwiftUI.TimelineView(.periodic(from: Date(), by: 1)) { context in
+                let elapsed = s.startedAt.map { max(0, Int(context.date.timeIntervalSince($0))) } ?? 0
                 HStack(spacing: Theme.Space.xs) {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                     Text("\(s.name)\(s.detail.map { " · \($0)" } ?? "") · \(elapsed / 60):\(String(format: "%02d", elapsed % 60))")

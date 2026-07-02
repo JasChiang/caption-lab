@@ -261,6 +261,8 @@ enum AudioConditioner {
                 return out                                  // player drained — done
             case .cannotDoInCurrentContext:
                 continue
+            case .error:
+                throw NSError(domain: "AudioConditioner", code: 2, userInfo: [NSLocalizedDescriptionKey: "offline render error"])
             @unknown default:
                 return out
             }
