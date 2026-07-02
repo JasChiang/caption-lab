@@ -205,7 +205,8 @@ final class PipelineViewModel {
     private func captionStops(du: [String], llm: [Int], gaps: [Double] = [], maxUnits: Int) -> [Int] {
         var brk = Set<Int>()
         if !llm.isEmpty {
-            for b in llm where b > 0 && b < du.count { brk.insert(b) }
+            // Drop an LLM hint that would strand a tail shorter than 2 units (same orphan-tail rule as below).
+            for b in llm where b > 0 && b <= du.count - 2 { brk.insert(b) }
         } else {
             var since = 0
             for (i, u) in du.enumerated() where i < du.count - 1 {
@@ -220,11 +221,15 @@ final class PipelineViewModel {
             var s = stops[k]
             let e = stops[k + 1]
             while e - s > maxUnits {
-                let hardCut = s + maxUnits
-                let lo = s + maxUnits / 2, hi = min(e - 1, hardCut)
+                // No orphan tails: every cut leaves at least `minTail` units before the next stop. Without
+                // this, a 17-unit chunk becomes 16 + one stranded character (「…十分的了」/「解」).
+                let minTail = 2
+                let hardCut = min(s + maxUnits, e - minTail)
+                guard hardCut > s else { break }
+                let lo = s + maxUnits / 2, hi = hardCut
                 // 1) a comma/semicolon in the window (semantic break); else
                 // 2) the biggest breath (inter-word pause > 40 ms) in the window (acoustic break); else
-                // 3) a blind hard cut.
+                // 3) a hard cut (capped so the tail keeps `minTail`).
                 let commaCut = stride(from: hi, through: lo, by: -1)
                     .first { du[$0 - 1].contains { "，、；：,;".contains($0) } }
                 var cut = commaCut ?? hardCut
