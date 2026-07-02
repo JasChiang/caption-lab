@@ -69,7 +69,8 @@ enum CaptionPipeline {
     static func retranscribeSuspectSpans(
         result res: TranscriptionResult, url: URL, contentSegments mapSegs: [ContentSegment],
         spanCache retranscribeSpanCache: inout [String: String],
-        conditioning: AudioConditioning = AudioConditioning()
+        conditioning: AudioConditioning = AudioConditioning(),
+        model: String = GeminiClient.defaultModel
     ) async -> (result: TranscriptionResult, retranscribes: [Retranscribe]) {
         var captionRetranscribes: [Retranscribe] = []
         guard hasGeminiKey else { return (res, captionRetranscribes) }
@@ -108,7 +109,10 @@ enum CaptionPipeline {
                     spanURL = cond.url
                     spanMIME = AudioConditioner.Container.wav.mimeType
                 }
-                guard let verbatim = try? await GeminiClient.transcribeAudio(fileURL: spanURL, mimeType: spanMIME, biasHint: s.hint) else {
+                // The re-listen uses the PIPELINE's model tier, not the cheap text tier: this is the hardest
+                // listening job in the app (a span the on-device recognizer already garbled), so sending it
+                // to flash-lite while the content map got flash was exactly backwards.
+                guard let verbatim = try? await GeminiClient.transcribeAudio(fileURL: spanURL, mimeType: spanMIME, biasHint: s.hint, model: model) else {
                     try? FileManager.default.removeItem(at: spanURL); continue
                 }
                 try? FileManager.default.removeItem(at: spanURL)

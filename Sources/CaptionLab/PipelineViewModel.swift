@@ -465,7 +465,7 @@ final class PipelineViewModel {
             var cache: [String: String] = [:]
             let r = await CaptionPipeline.retranscribeSuspectSpans(
                 result: corr.result, url: clip.url, contentSegments: clip.contentSegments, spanCache: &cache,
-                conditioning: conditioning)
+                conditioning: conditioning, model: model)
             working = r.result
             clip.retranscribeRows = r.retranscribes.map { RetranscribeRow(t: $0.t, from: $0.from, to: $0.to) }
             clip.mark(5, .done)

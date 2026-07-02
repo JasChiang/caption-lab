@@ -230,7 +230,7 @@ enum CLIRunner {
             if contentSegments.isEmpty { print("No content map → skipped.") }
             else {
                 var cache: [String: String] = [:]
-                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache, conditioning: conditioning)
+                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache, conditioning: conditioning, model: model)
                 working = r.result
                 if r.retranscribes.isEmpty { print("No suspect spans exceeded the threshold.") }
                 else { for rt in r.retranscribes { print("  @\(rt.t)\n    BEFORE: \(rt.from)\n    AFTER : \(rt.to)\n") } }
