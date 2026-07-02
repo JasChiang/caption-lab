@@ -153,12 +153,14 @@ enum CLIRunner {
                let rate = try? await track.load(.nominalFrameRate), rate > 0 { fps = Double(rate) }
         }
 
-        // [1] Content map
+        // [1] Content map (also emits harvested TERMS — one video call)
         header(1, "CONTENT MAP (Gemini video understanding)")
         var contentSegments: [ContentSegment] = []
+        var mapTerms: [String] = []
         do {
             let r = try await MediaDescriber.describeVideoContentMap(url: mediaURL, language: language, model: model)
             contentSegments = r.segments
+            mapTerms = r.terms
             if let label = r.label { print("Summary: \(label)") }
             print("\(r.segments.count) segment(s) · \(r.usage.summary)\n")
             for seg in r.segments {
@@ -209,9 +211,9 @@ enum CLIRunner {
             } else { print("  (second ASR run failed)") }
         }
 
-        // [3] Glossary
+        // [3] Glossary — terms came free with the content map call.
         header(3, "HARVESTED GLOSSARY TERMS")
-        let harvested = await CaptionPipeline.contentMapGlossaryTerms(contentSegments: contentSegments)
+        let harvested = mapTerms
         let glossary = Array(Set(harvested + glossaryArg)).sorted()
         print("harvested: \(harvested.isEmpty ? "(none)" : harvested.joined(separator: ", "))")
         print("effective: \(glossary.isEmpty ? "(empty)" : glossary.joined(separator: ", "))")

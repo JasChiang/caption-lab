@@ -18,39 +18,9 @@ enum CaptionPipeline {
         return k?.isEmpty == false
     }
 
-    // MARK: - Glossary harvest (from EditorViewModel+Captions.swift)
-
-    /// Harvest proper nouns / technical terms from a source's deep content map (if one exists — never runs
-    /// describe itself), so correction can spell terms the recognizer mangled with no textual cue.
-    /// Returns [] when there's no content map or no Gemini key — pure opportunistic upside.
-    static func contentMapGlossaryTerms(contentSegments: [ContentSegment]) async -> [String] {
-        guard !contentSegments.isEmpty else { return [] }
-        let dialogue = contentSegments.compactMap { $0.dialogue?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
-        guard dialogue.count > 8 else { return [] }
-        return await extractContentTerms(from: dialogue)
-    }
-
-    private static func extractContentTerms(from dialogue: String) async -> [String] {
-        let system = """
-        List the terms in the text a speech recognizer is likely to mishear or mis-segment: proper nouns \
-        (names, brands, products, places, titles), technical / scientific terms, AND fixed multi-character \
-        DOMAIN phrases or compound terms — a named practice, concept, method, or condition (e.g. 正念減壓, \
-        退化性關節炎). Spell each EXACTLY as in the text, in the text's own language, deduplicated. Exclude \
-        ordinary conversational word sequences — only terms a wrong character would visibly corrupt.
-        """
-        let schema: [String: Any] = [
-            "type": "object",
-            "properties": ["terms": ["type": "array", "items": ["type": "string"]]],
-            "required": ["terms"],
-        ]
-        // Generous maxTokens: gemini-flash spends hidden thinking tokens; a tight budget yields empty output.
-        guard let r = try? await GeminiClient.completeWithUsage(prompt: "Text:\n\(dialogue.prefix(4000))", system: system,
-                                                                model: GeminiClient.textModel, maxTokens: 4000, responseSchema: schema),
-              let data = r.text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let terms = obj["terms"] as? [String] else { return [] }
-        return terms.map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count > 1 }
-    }
+    // NOTE: the separate glossary-harvest call is GONE — the content map's own video call now emits a
+    // trailing `TERMS:` line (see MediaDescriber), so term extraction rides the pass that actually watched
+    // the clip (best context, incl. on-screen text) instead of a second flash-lite call over its dialogue.
 
     // MARK: - Retranscribe suspect spans (from EditorViewModel+Retranscribe.swift)
 

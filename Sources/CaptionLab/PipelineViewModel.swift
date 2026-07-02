@@ -406,12 +406,13 @@ final class PipelineViewModel {
         let manual = glossaryText.split(whereSeparator: { $0 == "," || $0 == "\n" })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
 
-        // [1] Content map
+        // [1] Content map (also emits the harvested TERMS — one video call, no separate harvest)
         clip.mark(1, .running)
         clip.detail(1, "Gemini watching the whole clip (30s–2min)")
+        var mapTerms: [String] = []
         do {
             let r = try await MediaDescriber.describeVideoContentMap(url: clip.url, language: language, model: model)
-            clip.contentSegments = r.segments; clip.contentLabel = r.label; clip.mark(1, .done)
+            clip.contentSegments = r.segments; clip.contentLabel = r.label; mapTerms = r.terms; clip.mark(1, .done)
         } catch { clip.mark(1, .failed(error.localizedDescription)) }
 
         // [2] ASR
@@ -420,9 +421,9 @@ final class PipelineViewModel {
         catch { clip.mark(2, .failed(error.localizedDescription)); return }
         guard let asr = clip.asr else { return }
 
-        // [3] Glossary
+        // [3] Glossary — terms came free with the content map call; just merge the manual list.
         clip.mark(3, .running)
-        clip.harvested = await CaptionPipeline.contentMapGlossaryTerms(contentSegments: clip.contentSegments)
+        clip.harvested = mapTerms
         clip.effectiveGlossary = Array(Set(clip.harvested + manual)).sorted()
         clip.mark(3, .done)
 

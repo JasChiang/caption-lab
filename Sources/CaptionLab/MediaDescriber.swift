@@ -10,7 +10,7 @@ enum MediaDescriber {
     /// the parsed segments + a one-line summary.
     static func describeVideoContentMap(
         url: URL, language: String, model: String = GeminiClient.defaultModel
-    ) async throws -> (label: String?, segments: [ContentSegment], usage: GeminiClient.Usage) {
+    ) async throws -> (label: String?, segments: [ContentSegment], terms: [String], usage: GeminiClient.Usage) {
         let prompt = """
         Watch this entire video and produce a VERBATIM, time-stamped transcript of everything spoken, in order. \
         Output ONE line per block, EXACTLY as:
@@ -28,8 +28,13 @@ enum MediaDescriber {
         • <visual> is a brief note on what is on screen in \(language) (subjects, action, setting), or - if it \
         is unchanged from the previous block.
         Transcribe the WHOLE video with no gaps. Do NOT include non-speech events like [笑聲]/[Laughter]. \
-        After all blocks, output one final line:
+        After all blocks, output two final lines:
         SUMMARY: <one sentence describing the whole clip in \(language)>
+        TERMS: <comma-separated terms from the dialogue a speech recognizer would likely mishear or \
+        mis-segment: proper nouns (names, brands, products, places, titles), technical / scientific terms, \
+        and fixed multi-character domain phrases (e.g. 正念減壓, 退化性關節炎). Spell each EXACTLY as \
+        spoken, in its own language, deduplicated; only terms a wrong character would visibly corrupt — \
+        never ordinary word sequences. Leave empty after the colon if none.>
         No preamble, no markdown, no extra lines.
         """
         // Verbatim short blocks are far longer than a shot summary, so cap at the model's full output limit
@@ -37,18 +42,28 @@ enum MediaDescriber {
         // transcript mid-way. Gemini File API uploads the local clip directly; low-res keeps it cheap.
         let r = try await GeminiClient.describeVideo(fileURL: url, prompt: prompt, model: model, maxTokens: 65536, lowRes: true)
         let parsed = parseContentMap(r.text)
-        return (parsed.label, parsed.segments, r.usage)
+        return (parsed.label, parsed.segments, parsed.terms, r.usage)
     }
 
-    /// Parse the `[MM:SS-MM:SS] visual | dialogue` lines + a trailing `SUMMARY:` line.
-    static func parseContentMap(_ text: String) -> (label: String?, segments: [ContentSegment]) {
+    /// Parse the `[MM:SS-MM:SS] visual | dialogue` lines + trailing `SUMMARY:` / `TERMS:` lines. The terms
+    /// ride the SAME video call (the model just watched the clip — best possible context, incl. on-screen
+    /// text), replacing what used to be a separate flash-lite harvest call.
+    static func parseContentMap(_ text: String) -> (label: String?, segments: [ContentSegment], terms: [String]) {
         var segments: [ContentSegment] = []
         var label: String?
+        var terms: [String] = []
         for raw in text.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             if line.uppercased().hasPrefix("SUMMARY:") {
                 label = line.dropFirst("SUMMARY:".count).trimmingCharacters(in: .whitespaces); continue
+            }
+            if line.uppercased().hasPrefix("TERMS:") {
+                terms = line.dropFirst("TERMS:".count)
+                    .split(whereSeparator: { $0 == "," || $0 == "，" || $0 == "、" })
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { $0.count > 1 }
+                continue
             }
             guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { continue }
             let range = String(line[line.index(after: line.startIndex)..<close])  // MM:SS-MM:SS
@@ -70,7 +85,7 @@ enum MediaDescriber {
                                                dialogue: dialogue, speaker: speaker))
             }
         }
-        return (label, segments)
+        return (label, segments, terms)
     }
 
     private static func secondsFromMMSS(_ s: String) -> Double? {
