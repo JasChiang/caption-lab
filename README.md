@@ -85,6 +85,17 @@ swift run CaptionLab --cli --audio-check <media>    # no key needed
 
 Test clips are local media (never committed) referenced by neutral aliases in the dev log.
 
+### Credits & provenance
+
+- **Direction**: [@JasChiang](https://github.com/JasChiang) provided the architectural ideas and design
+  decisions (the perception/judgment/mechanics split, the cross-checking approach, what to build and what
+  to reject) — steering, testing on real clips, and calling out the over-fitting.
+- **Implementation**: essentially all of the code was written by **Claude Code** (Anthropic) working under
+  that direction — see the co-author trailers throughout the commit history, including the bugs it wrote
+  and then had to find.
+- **Apple `SpeechTranscriber` as the ASR front-end comes from [PalmierPro](https://github.com/palmier-io/palmier-pro)**
+  (the upstream project, which uses Apple ASR only); the LLM layers were added in this lab.
+
 ### License
 
 GPL-3.0, same as upstream — see `LICENSE` and `NOTICE` for provenance.
@@ -163,6 +174,15 @@ swift run CaptionLab --cli <media> [--model gemini-pro-latest] [--dump-json out/
   Apple ASR 邊界差;讓 LLM 看裸字清單決定剪誰會誤砍中文疊詞(常常)——直到剪標併入句子級判斷才根治。
 
 測試素材為本機媒體(從未 commit),開發記錄中以中性代號指涉。
+
+### 致謝與出處
+
+- **方向**:[@JasChiang](https://github.com/JasChiang) 提供基礎架構想法與設計決策(感知/判斷/機械的
+  分層、雙耳互相對質的路線、該做什麼與該否決什麼)——掌舵、用真實素材驗證、抓出 over-fitting。
+- **實作**:程式碼幾乎全部由 **Claude Code**(Anthropic)在上述方向下完成——見 commit 歷史中的
+  co-author 署名,包括它自己寫出來再自己抓到的 bug。
+- **以 Apple `SpeechTranscriber` 作為 ASR 前端源自 [PalmierPro](https://github.com/palmier-io/palmier-pro)**
+  (上游專案,僅使用 Apple ASR);LLM 各層為本實驗室新增。
 
 ### 授權
 
