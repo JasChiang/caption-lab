@@ -25,7 +25,9 @@ general architecture — perception / judgment / mechanics:
 - Manual edits preserve/shift cutUnits like breaks (marks inside an edited span are dropped as stale).
 - Retranscribed spans get fresh text with empty cutUnits (old marks would be stale — correct behavior).
 
-Verify on the Mac: rerun a disfluent clip (受訪者A/講者B) — CUT SUMMARY should show mode "marks", stutters cut,
+VERIFIED (2026-07-02, user): marks mode works on real clips — stutters cut, 常常-class reduplications kept,
+AND speaker-change ¦ breaks split host/guest handoffs while cross-speaker echoes survive ⟨⟩ marking.
+Original checklist: rerun a disfluent clip (受訪者A/講者B) — CUT SUMMARY should show mode "marks", stutters cut,
 常常-class words kept; 朗讀者C should show few/no cuts. GUI picker now "Corrector marks (default) / Heuristic".
 
 ---
