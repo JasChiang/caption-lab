@@ -165,6 +165,16 @@ enum GeminiClient {
         let meta = obj["usageMetadata"] as? [String: Any]
         let usage = Usage(promptTokens: (meta?["promptTokenCount"] as? Int) ?? 0,
                           outputTokens: (meta?["candidatesTokenCount"] as? Int) ?? 0)
+        // Feed the session cost dashboard. promptTokensDetails carries the per-modality split — audio/video
+        // input is priced differently from text on some tiers, so keep the AV share separate.
+        var avTokens = 0
+        if let details = meta?["promptTokensDetails"] as? [[String: Any]] {
+            for d in details where ["AUDIO", "VIDEO", "IMAGE"].contains((d["modality"] as? String) ?? "") {
+                avTokens += (d["tokenCount"] as? Int) ?? 0
+            }
+        }
+        GeminiUsageLedger.record(model: model, promptTokens: usage.promptTokens,
+                                 avPromptTokens: avTokens, outputTokens: usage.outputTokens)
         return (text, usage)
     }
 

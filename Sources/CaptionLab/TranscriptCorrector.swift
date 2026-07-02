@@ -223,7 +223,9 @@ enum TranscriptCorrector {
             } else if aw.count == bu.count {
                 result.append(contentsOf: zip(aw, bu).map { TranscriptionWord(text: $1, start: $0.start, end: $0.end) })
             } else if let env = envelope, let s = aw.first?.start, let e = aw.last?.end {
-                result.append(contentsOf: CaptionPipeline.placeOnEnergyPeaks(bu, start: s, end: e, envelope: env))
+                // Slice to the span: placeOnEnergyPeaks treats sample 0 as `start`, so the full-clip envelope
+                // correct() passes would otherwise pick peaks from the wrong window (fixed 2026-07-02).
+                result.append(contentsOf: CaptionPipeline.placeOnEnergyPeaks(bu, start: s, end: e, envelope: env.slice(s...e)))
             } else {
                 result.append(contentsOf: aw)                                    // no envelope → leave raw ASR
             }

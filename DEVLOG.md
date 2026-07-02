@@ -4,6 +4,33 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-02 (h) — manual caption editing + Gemini cost dashboard
+
+1. **Manual caption editing** (`CaptionEditor.swift` + CAPTION LINES card in ResultsPanels). Edit a line in a
+   multi-line field — **Enter splits into separate caption lines** (PalmierPro convention; ¦/| also work) —
+   or merge with the next line (within a segment: drop the break; across segments: merge the segments).
+   Edits mutate `clip.afterRetranscribe` (the artifact captions render from), text that still matches keeps
+   its word timing (LCS), changed runs re-time on energy peaks via `applyCorrectedText`. A `[totalUnits]`
+   sentinel break keeps captionStops' LLM path authoritative when a merge removes the last interior break
+   (else the punctuation fallback would re-split). Re-running the pipeline overwrites manual edits.
+   Chunking refactored into `captionChunks(for:)` — single source for overlay cache + editor.
+   NOT yet done: PalmierPro's Alt+Enter soft wrap WITHIN one caption (needs an intra-line break in the data
+   model; overlay auto-wraps for now).
+2. **Gemini usage/cost dashboard** (`GeminiUsage.swift`, UsagePanel between Controls and Results). Every
+   generateContent call records model + prompt/output tokens + audio-video share (promptTokensDetails) into
+   a session ledger; panel shows per-model calls/in/out/cost + total. Rates hardcoded from
+   ai.google.dev/gemini-api/docs/pricing (2026-07, paid tier): pro $2/$12, flash $1.50/$9, lite $0.10
+   (AV-in $0.30)/$0.40 — pro >200k surcharge not modeled. CLI records don't materialize (main thread blocked
+   on the semaphore) — GUI feature.
+3. **Bugfix — wrong-window energy peaks**: `TranscriptCorrector.correct` passes a FULL-clip envelope but
+   `placeOnEnergyPeaks` treats sample 0 as span start, so inserted-run re-timing picked peaks from the wrong
+   window. Added `AudioEnvelope.slice(_:)` and sliced in `rebuildSegment` (manual edits + correction both).
+4. Earlier today (see commits): ¦ breaks made authoritative (16-cap only on the punctuation fallback),
+   orphan-tail fix (min 2-unit tail), GUI model default → gemini-pro-latest, slow-fast default OFF,
+   retranscribe re-listen now uses the pipeline model (was stuck on flash-lite).
+
+---
+
 ## Session 2026-07-02 (g) — first Mac build + runtime verification
 
 Machine: local Mac, **Xcode-beta 26.4** (`/Applications/Xcode-beta.app`; CLT-only select fails — full Xcode

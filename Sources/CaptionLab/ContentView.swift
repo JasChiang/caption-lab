@@ -27,6 +27,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.md) {
                     ControlsPanel(vm: vm)
+                    UsagePanel()
                     ResultsPanels(vm: vm)
                 }
                 .padding(Theme.Space.lg)

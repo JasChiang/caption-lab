@@ -158,46 +158,15 @@ final class PipelineViewModel {
     /// playback previously pegged the CPU and made the GUI sluggish.
     func captionLines() -> [CaptionLine] { captionLineCache }
 
-    /// Recompute the caption-line cache from current clip results. Cheap; call whenever results/layout change.
+    /// Recompute the caption-line cache from current clip results. Cheap; call whenever results/layout
+    /// change. Chunking itself lives in `captionChunks(for:)` (CaptionEditor.swift), shared with the editor.
     func rebuildCaptionCache() {
         var lines: [CaptionLine] = []
         for (idx, clip) in clips.enumerated() {
             let off = rawOffset(of: idx)
-            guard let result = clip.afterRetranscribe ?? clip.corrected else { continue }
-            let words = result.words
-            for seg in result.segments {
-                let segWords = words.filter {
-                    guard let s = $0.start, let e = $0.end else { return false }
-                    let m = (s + e) / 2
-                    return m >= seg.start && m < seg.end
-                }
-                guard !segWords.isEmpty else { continue }
-                let du = CaptionBuilder.units(seg.text, keepPunctuation: true)   // units keep trailing punctuation
-                guard !du.isEmpty else { continue }
-                // Inter-word silence at each unit boundary (positional unit≈word mapping, same as the chunk
-                // loop below). Lets a forced break land on a real breath instead of mid-phrase — the main
-                // lever for fast speech, where semantic ¦ hints are sparse and pauses are few but real.
-                var gaps = [Double](repeating: 0, count: du.count)
-                let m = min(du.count, segWords.count)
-                if m >= 2 {
-                    for k in 1..<m {
-                        if let e0 = segWords[k - 1].end, let s1 = segWords[k].start { gaps[k] = max(0, s1 - e0) }
-                    }
-                }
-                var s = 0, wi = 0
-                for e in captionStops(du: du, llm: seg.captionBreaks, gaps: gaps, maxUnits: 16) {
-                    guard e > s else { continue }
-                    let last = (e == du.count)
-                    let n = last ? (segWords.count - wi) : min(e - s, segWords.count - wi)
-                    if n > 0 {
-                        let take = segWords[wi..<wi + n]; wi += n
-                        let text = du[s..<min(e, du.count)].joined().trimmingCharacters(in: .whitespaces)
-                        if let a = take.first?.start, let b = take.last?.end, !text.isEmpty {
-                            lines.append(CaptionLine(start: off + a, end: off + b, text: text))
-                        }
-                    }
-                    s = e
-                }
+            guard let result = editableResult(for: clip) else { continue }
+            for c in captionChunks(for: result) {
+                lines.append(CaptionLine(start: off + c.start, end: off + c.end, text: c.text))
             }
         }
         captionLineCache = lines
@@ -205,7 +174,7 @@ final class PipelineViewModel {
 
     /// Unit indices to break AFTER (the list always ends at `du.count`): the LLM's ¦ hints when present, else
     /// punctuation-derived, then extra breaks inserted so no chunk exceeds `maxUnits` (preferring a comma).
-    private func captionStops(du: [String], llm: [Int], gaps: [Double] = [], maxUnits: Int) -> [Int] {
+    func captionStops(du: [String], llm: [Int], gaps: [Double] = [], maxUnits: Int) -> [Int] {
         var brk = Set<Int>()
         if !llm.isEmpty {
             // Drop an LLM hint that would strand a tail shorter than 2 units (same orphan-tail rule as below).

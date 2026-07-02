@@ -110,6 +110,17 @@ struct AudioEnvelope: Sendable, Equatable {
     let samples: [Float]
 
     var duration: Double { Double(samples.count) * hopSeconds }
+
+    /// Sub-envelope covering `range` of the SAME clip, re-based so sample 0 ≈ range.lowerBound — the contract
+    /// `placeOnEnergyPeaks` expects (it treats sample i as `start + i·hop`). Passing a full-clip envelope
+    /// where a span-based one is expected picks peaks from the wrong window — slice before handing down.
+    func slice(_ range: ClosedRange<Double>) -> AudioEnvelope {
+        guard hopSeconds > 0, !samples.isEmpty else { return self }
+        let lo = max(0, min(samples.count, Int((range.lowerBound / hopSeconds).rounded(.down))))
+        let hi = max(lo, min(samples.count, Int((range.upperBound / hopSeconds).rounded(.up)) + 1))
+        guard lo < hi else { return AudioEnvelope(hopSeconds: hopSeconds, samples: []) }
+        return AudioEnvelope(hopSeconds: hopSeconds, samples: Array(samples[lo..<hi]))
+    }
 }
 
 enum AudioEnvelopeError: LocalizedError {

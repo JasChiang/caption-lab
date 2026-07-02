@@ -3,6 +3,8 @@ import SwiftUI
 // Results for the SELECTED clip: content map, glossary, correction diff, retranscribe, cut summary.
 struct ResultsPanels: View {
     @Bindable var vm: PipelineViewModel
+    @State private var editingChunk: Int? = nil
+    @State private var editText = ""
 
     var body: some View {
         if let clip = vm.selectedClip {
@@ -20,6 +22,7 @@ struct ResultsPanels: View {
                 contentMap(clip)
                 glossary(clip)
                 diff(clip)
+                captionEditorCard(clip)
                 retranscribe(clip)
             }
         } else {
@@ -207,6 +210,64 @@ struct ResultsPanels: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: Caption editor (manual fix / split / merge)
+
+    @ViewBuilder private func captionEditorCard(_ clip: ClipModel) -> some View {
+        card("CAPTION LINES (editable)") {
+            if let result = vm.editableResult(for: clip) {
+                let chunks = vm.captionChunks(for: result)
+                if chunks.isEmpty {
+                    empty()
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text("tap time to seek · ✏️ edit (Enter = 切成獨立字幕行) · ⌥ merge with next · re-running the pipeline discards manual edits")
+                            .font(Theme.ui(9)).foregroundStyle(Theme.faint)
+                        ForEach(chunks) { c in
+                            HStack(alignment: .top, spacing: Theme.Space.xs) {
+                                Button(tc(c.start)) { vm.seek(to: c, in: clip) }
+                                    .buttonStyle(.plain).font(Theme.mono(9)).foregroundStyle(Theme.accent)
+                                    .frame(width: 48, alignment: .trailing)
+                                if editingChunk == c.id {
+                                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                        TextEditor(text: $editText)
+                                            .font(Theme.mono(11))
+                                            .frame(minHeight: 44, maxHeight: 100)
+                                            .scrollContentBackground(.hidden)
+                                            .padding(4)
+                                            .background(RoundedRectangle(cornerRadius: Theme.Radius.sm).fill(Theme.panelHi))
+                                            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.sm).stroke(Theme.accent.opacity(0.6)))
+                                        HStack(spacing: Theme.Space.sm) {
+                                            Button("Save") {
+                                                vm.applyCaptionEdit(clip: clip, chunkID: c.id, newText: editText)
+                                                editingChunk = nil
+                                            }
+                                            .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                                            Button("Cancel") { editingChunk = nil }.buttonStyle(.bordered).controlSize(.small)
+                                            Text("Enter 在游標處切斷成兩行字幕").font(Theme.ui(9)).foregroundStyle(Theme.faint)
+                                        }
+                                    }
+                                } else {
+                                    Text(c.text).font(Theme.mono(11)).foregroundStyle(Theme.text)
+                                    Spacer()
+                                    Button { editingChunk = c.id; editText = c.text } label: { Image(systemName: "pencil") }
+                                        .buttonStyle(.plain).foregroundStyle(Theme.dim)
+                                        .help("Edit this line — press Enter inside the text to split it into two caption lines")
+                                    if c.id + 1 < chunks.count {
+                                        Button { vm.mergeCaptionWithNext(clip: clip, chunkID: c.id) } label: { Image(systemName: "arrow.triangle.merge") }
+                                            .buttonStyle(.plain).foregroundStyle(Theme.dim)
+                                            .help("Merge with the next line")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                empty("run the pipeline first")
             }
         }
     }

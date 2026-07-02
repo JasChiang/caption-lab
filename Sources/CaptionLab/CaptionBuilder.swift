@@ -24,6 +24,21 @@ enum CaptionBuilder {
         return units
     }
 
+    /// Joins text pieces back into display text, inserting a space only between two Latin/number neighbors
+    /// (CJK butts together). Inverse-ish of `units` for manual-edit splicing; Latin spacing is approximate.
+    static func joinUnits(_ pieces: [String]) -> String {
+        var out = ""
+        for p in pieces where !p.isEmpty {
+            if let last = out.last, let first = p.first,
+               !isCJKChar(last), !isCJKChar(first),
+               last.isLetter || last.isNumber, first.isLetter || first.isNumber {
+                out += " "
+            }
+            out += p
+        }
+        return out
+    }
+
     static func isCJKChar(_ c: Character) -> Bool {
         c.unicodeScalars.contains {
             (0x3400...0x4DBF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value)
