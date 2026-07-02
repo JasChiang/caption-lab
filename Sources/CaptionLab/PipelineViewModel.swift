@@ -108,7 +108,10 @@ final class PipelineViewModel {
     var cutDetector: CutStutters.Detector = .llm
     var aggressiveness: CutAggressiveness = .balanced
     var language = "Traditional Chinese"
-    var model = GeminiClient.defaultModel
+    /// GUI defaults to PRO: the 財經節目E 0:17 case showed flash-tier ears miss marginal fast speech that pro
+    /// hears (and the map is the reference everything downstream leans on). CLI keeps the cheap flash
+    /// default for batch testing — override with --model there.
+    var model = "gemini-pro-latest"
     var conditioning = AudioConditioning()
     var alignerMode: AlignerMode = .apple
     var qwenAvailable: Bool { QwenAligner.isAvailable() }
@@ -216,6 +219,10 @@ final class PipelineViewModel {
                 if hard || (soft && since >= 8) { brk.insert(i + 1); since = 0 }
             }
         }
+        // Gemini's ¦ breaks are AUTHORITATIVE — no forced length cap on top (a hard cut mid-thought reads
+        // worse than an occasionally long line; the overlay wraps). The cap below only applies to the
+        // punctuation FALLBACK, where a no-punctuation run-on would otherwise become one endless line.
+        guard llm.isEmpty else { return brk.sorted() + [du.count] }
         let stops = [0] + brk.sorted() + [du.count]
         for k in 0..<(stops.count - 1) {
             var s = stops[k]
