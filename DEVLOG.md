@@ -4,6 +4,50 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-02 (g) — first Mac build + runtime verification
+
+Machine: local Mac, **Xcode-beta 26.4** (`/Applications/Xcode-beta.app`; CLT-only select fails — full Xcode
+required). Build: `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift build`. Now GREEN.
+
+### Build fixes (were broken from Linux authoring)
+- `SwiftUI.TimelineView` had to be qualified — this module defines its own `struct TimelineView` (waveform),
+  which shadowed it in the new running-status line. Symptom was the bogus "type 'PipelineViewModel' has no
+  member 'periodic'".
+- AVAudioEngine offline-render `switch` needed an explicit `.error` case (throws → conditioning falls back).
+
+### New diagnostic: `--cli --audio-check <media>` (no Gemini key needed)
+Runs SoundClassifier + AudioQuality + AudioConditioner, then an on-device ASR A/B (conditioning OFF vs ON)
+printing word count, first.start, last.end, overshoot-past-duration. Runs before the key gate.
+
+### Verification results (5 test clips)
+- **Bug #1 (SoundClassifier fed a video container) — NOT a bug.** `SNAudioFileAnalyzer` opens `.mp4` fine:
+  評測頻道D music 52% (6 spans, warned), 財經節目E 0%, 朗讀者C 15%. Music detection works.
+- **Bug #2 (time-pitch priming latency) — NOT present.** On a slowed clip (講者B @0.86×): first.start=0.00
+  (no leading offset), last.end 55.77 < 55.82 dur (no overshoot). Mapping is clean.
+- **NEW bug FOUND + FIXED: `syllableRate` overcounted ~5×.** Raw 10 ms envelope local-maxima read every
+  clip at 25–30 syl/s, so ALL clips tripped the fast threshold and slowed to 0.60× (adaptivity dead).
+  Fix: smooth envelope ~50 ms + enforce ≥140 ms inter-peak spacing. Now realistic: 朗讀者C 5.9 / 評測頻道D 6.1 /
+  財經節目E 5.7 → no slow; 受訪者A 7.4 / 講者B 7.5 → mild slow (0.86–0.88×).
+- **Conditioning A/B proves the point:** 講者B (unclear speech) 261→**265 words** with conditioning ON;
+  朗讀者C (clean) 91→91 **identical** (normalize doesn't disturb clean audio). Net win where needed, no
+  regression where not.
+- Bug #3 (clipping measured post-resample) — unverified (no clipped test clip; all read 0.00–0.05%). Left as-is.
+- Bug #5 (zero-width-word cut) — pre-existing edge case, not hit here.
+
+### CONFIRMED via SDK grep: contextual biasing IS available on this SDK
+`Speech.AnalysisContext` has `contextualStrings: [ContextualStringsTag: [String]]` with `.general`;
+`SpeechAnalyzer` exposes `var context` / `setContext(_:)` and an `analysisContext:` init param. So gap #1
+(auto-feed the content-map-harvested terms as contextual bias, zero manual) is now WIREABLE. Caveat unchanged:
+the module may be `DictationTranscriber` that honors it vs `SpeechTranscriber` — setting it is free either way
+(opportunistic upside). NOT yet wired — needs the term harvest moved before ASR + threading into Transcription.
+
+### Still open
+- Wire contextualStrings (gap #1) — decision pending (free to set, uncertain if SpeechTranscriber honors it).
+- Unit-test target (needs lib/exe split) — still deferred; now that build works on the Mac it's safe to do.
+- CLAUDE.md says "macOS 26"; this Mac's newest is Xcode 26.4 (no 27 installed here) — leave as-is, accurate.
+
+---
+
 ## Session 2026-07-01 (f) — closing the functional gaps from (e)
 
 Branch: `claude/fast-speech-transcription-7zyzzn`. Implemented the ranked functional gaps. Still UNBUILT

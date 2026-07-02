@@ -49,6 +49,7 @@ enum CLIRunner {
         var glossaryArg: [String] = []
         var conditioning = AudioConditioning()
         var abConditioning = false
+        var audioCheckOnly = false
         var doRetranscribe = true
         var useHeuristic = false
         var aggressiveness: CutAggressiveness = .balanced
@@ -68,6 +69,7 @@ enum CLIRunner {
             case "--no-slow-fast": conditioning.slowFastSpeech = false
             case "--denoise": conditioning.denoise = true
             case "--ab-conditioning": abConditioning = true
+            case "--audio-check": audioCheckOnly = true
             case "--no-retranscribe": doRetranscribe = false
             case "--cut-heuristic": useHeuristic = true
             case "--aggressiveness": i += 1; if i < args.count, let v = CutAggressiveness(rawValue: args[i]) { aggressiveness = v }
@@ -102,6 +104,36 @@ enum CLIRunner {
         guard let mediaPath else { print(usage); return 1 }
         let mediaURL = URL(fileURLWithPath: (mediaPath as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: mediaURL.path) else { err("Error: File not found: \(mediaURL.path)\n"); return 1 }
+
+        // On-device audio diagnostics — no Gemini key needed, so it runs before the key gate. Verifies the
+        // SoundAnalysis music path, clipping/SNR analysis, and that conditioning produces sane output.
+        if audioCheckOnly {
+            print("Audio check — \(mediaURL.lastPathComponent)")
+            let music = await SoundClassifier.detectMusic(url: mediaURL)
+            print("  SoundClassifier.detectMusic → \(music.map { String(format: "music %.0f%% over %d span(s)", $0.musicFraction * 100, $0.ranges.count) } ?? "nil (analyzer could not open the file)")")
+            if let q = await AudioQuality.analyze(url: mediaURL) {
+                print(String(format: "  quality: SNR ~%.1f dB · clipping %.3f%% · music %.0f%%", q.snrDb, q.clippingFraction * 100, q.musicFraction * 100))
+                for w in q.warnings { print("  ⚠︎ \(w)") }
+            } else { print("  quality: nil (too short / unreadable)") }
+            if let c = await AudioConditioner.condition(url: mediaURL, options: AudioConditioning()) {
+                print("  conditioned: \(c.report.summary) · timeScale=\(String(format: "%.4f", c.report.timeScale))")
+                try? FileManager.default.removeItem(at: c.url)
+            } else { print("  conditioned: nil (no-op or failed)") }
+            // ASR timing sanity (on-device, no Gemini): a time-stretch priming/latency bug would shift word
+            // timings late and push last.end past the real duration. Compare conditioning OFF vs ON.
+            let dur = (try? await AVURLAsset(url: mediaURL).load(.duration))?.seconds ?? 0
+            print(String(format: "  duration: %.2fs", dur))
+            for (label, opt) in [("OFF", AudioConditioning.off), ("ON ", AudioConditioning())] {
+                if let r = try? await Transcription.transcribeVideoAudio(videoURL: mediaURL, conditioning: opt) {
+                    let fs = r.words.first?.start ?? -1
+                    let le = r.words.compactMap(\.end).max() ?? -1
+                    print(String(format: "  ASR %@: words=%d  first.start=%.2f  last.end=%.2f  overshoot=%+.2f  [%@]",
+                                 label, r.words.count, fs, le, le - dur, r.conditionReport?.summary ?? "no-op"))
+                }
+            }
+            return 0
+        }
+
         if ProcessInfo.processInfo.environment["GEMINI_API_KEY"]?.isEmpty != false {
             err("Error: GEMINI_API_KEY is not set.\n"); return 1
         }

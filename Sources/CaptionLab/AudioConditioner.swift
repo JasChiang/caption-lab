@@ -136,6 +136,9 @@ enum AudioConditioner {
 
     /// Syllables per VOICED second, estimated from RMS energy peaks (one CJK syllable ≈ one nucleus peak).
     /// Language-general and cheap — no recognition needed, so it can gate the slow-down before ASR runs.
+    /// The raw 10 ms envelope has sub-syllable ripple that inflates a naive local-maxima count ~5×, so it is
+    /// SMOOTHED (~50 ms) and peaks are required to be at least ~140 ms apart — a syllable nucleus can't recur
+    /// faster than that. Without this every clip reads 25–30 syl/s and always trips the fast threshold.
     private static func syllableRate(_ floats: [Float]) -> Double {
         var env: [Float] = []
         var i = 0
@@ -146,12 +149,24 @@ enum AudioConditioner {
             env.append((sum / Float(n)).squareRoot())
             i += n
         }
-        guard env.count > 2, let maxE = env.max(), maxE > 0 else { return 0 }
-        let floor = maxE * 0.15
-        var peaks = 0, voiced = 0
+        guard env.count > 5, let maxE = env.max(), maxE > 0 else { return 0 }
+        // Moving-average smooth over ~50 ms (5 hops).
+        let win = 5
+        var sm = [Float](repeating: 0, count: env.count)
         for k in env.indices {
-            if env[k] >= floor { voiced += 1 }
-            if k > 0, k < env.count - 1, env[k] >= env[k - 1], env[k] > env[k + 1], env[k] >= floor { peaks += 1 }
+            let lo = max(0, k - win / 2), hi = min(env.count - 1, k + win / 2)
+            var s: Float = 0
+            for j in lo...hi { s += env[j] }
+            sm[k] = s / Float(hi - lo + 1)
+        }
+        let floor = maxE * 0.15
+        let minGap = 14   // hops ≈ 140 ms → caps the count at a realistic ~7 syllables/s
+        var peaks = 0, voiced = 0, lastPeak = -minGap
+        for k in sm.indices {
+            if sm[k] >= floor { voiced += 1 }
+            if k > 0, k < sm.count - 1, sm[k] >= sm[k - 1], sm[k] > sm[k + 1], sm[k] >= floor, k - lastPeak >= minGap {
+                peaks += 1; lastPeak = k
+            }
         }
         let voicedSeconds = Double(voiced) * Double(hopSamples) / sampleRate
         guard voicedSeconds > 0.2 else { return 0 }
