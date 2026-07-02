@@ -268,8 +268,18 @@ final class PipelineViewModel {
            let rate = try? await track.load(.nominalFrameRate), rate > 0 {
             clip.fps = Double(rate)
         } else { clip.fps = 30 }
-        clip.envelope = try? await AudioEnvelopeExtractor.extract(from: clip.url)
-        clip.audioQuality = await AudioQuality.analyze(url: clip.url)
+        // Heavy audio analysis (waveform envelope + SoundAnalysis music / clipping / SNR) runs OFF the main
+        // actor at LOW priority, so dropping a clip never blocks or janks the UI. Results publish back on the
+        // main actor when ready — the waveform and AUDIO QUALITY card fill in a moment after the clip appears.
+        let url = clip.url
+        Task.detached(priority: .utility) {
+            let envelope = try? await AudioEnvelopeExtractor.extract(from: url)
+            let quality = await AudioQuality.analyze(url: url)
+            await MainActor.run {
+                clip.envelope = envelope
+                clip.audioQuality = quality
+            }
+        }
     }
 
     // MARK: - Composition (joined, seekable; raw or cuts-applied)
