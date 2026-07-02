@@ -80,8 +80,9 @@ swift run CaptionLab --cli --audio-check <media>    # no key needed
   stage's job instead.
 - **Negative results we paid for so you don't have to**: time-stretching fast speech before ASR *swaps*
   errors instead of reducing them; a forced aligner (Qwen) produced worse timing than Apple's ASR
-  boundaries; per-word-list LLM cut decisions mis-cut CJK reduplications (常常) until cut marking moved
-  into the sentence-level judgment pass.
+  boundaries — the Qwen A/B lane still ships, so you can reproduce that comparison yourself; per-word-list
+  LLM cut decisions mis-cut CJK reduplications (常常) until cut marking moved into the sentence-level
+  judgment pass.
 
 Test clips are local media (never committed) referenced by neutral aliases in the dev log.
 
