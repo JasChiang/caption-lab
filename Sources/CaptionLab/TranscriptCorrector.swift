@@ -25,12 +25,18 @@ enum TranscriptCorrector {
         // Content-map timestamps are whole-second, model-estimated; widen the window so a reference that sits
         // just outside the segment's exact bounds is still matched.
         let mapSlop = 1.0
+        // Carry the map's [speaker] tags into the REFERENCE: the recognizer merges two voices with no pause
+        // into ONE segment, and only the map knows where the speaker changed — the rule below uses the tag to
+        // place a ¦ at the seam and to stop cross-speaker echoes (A: 這個問題 / B: 這個問題…) from looking
+        // like a stutter to the ⟨⟩ marking.
         func mapRef(_ seg: TranscriptionSegment) -> String? {
             let d = contentSegments
                 .filter { $0.startSeconds < seg.end + mapSlop && $0.endSeconds > seg.start - mapSlop }
-                .compactMap { $0.dialogue?.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
+                .compactMap { cs -> String? in
+                    guard let t = cs.dialogue?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return nil }
+                    return cs.speaker.map { "[\($0)] \(t)" } ?? t
+                }
+                .joined(separator: " / ")
             return d.isEmpty ? nil : d
         }
         let hasRefs = contentSegments.contains { ($0.dialogue?.isEmpty == false) }
@@ -52,7 +58,11 @@ enum TranscriptCorrector {
         the REFERENCE's word (e.g. a line reads 反應 where the REFERENCE clearly says 反映 → use 反映). But the REFERENCE is \
         NOT authoritative on disfluency: it routinely drops stutters and false starts, so never delete a \
         repeat to match it — keep every 去去去 / 進進 from the line. Swap a word only where line and REFERENCE \
-        clearly describe the same syllable(s); never import extra wording the line does not support.
+        clearly describe the same syllable(s); never import extra wording the line does not support. \
+        REFERENCE entries may carry a [speaker] tag. When ONE line contains consecutive speech from MORE THAN \
+        ONE speaker (the recognizer merges voices that overlap with no pause), insert a ¦ exactly at the \
+        speaker change — a caption line must belong to ONE voice. And words repeated ACROSS a speaker change \
+        (A says 這個問題, B echoes 這個問題…) are dialogue, NOT a stutter — never wrap them in ⟨ ⟩.
         """
         // Code-switching is a distinct failure mode for a single-locale (zh-TW) recognizer: it emits an
         // English word as ONE often-garbled Latin token (or drops it), and sometimes writes a spoken English
