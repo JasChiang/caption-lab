@@ -1,175 +1,169 @@
-# caption-lab
+# CaptionLab
 
-A standalone macOS app **and** CLI that reproduces PalmierPro's caption-correction pipeline end-to-end,
-extracted into a fresh isolated repo so the real behavior can be tested outside the full app.
+**English** | [繁體中文](#captionlab-繁體中文)
 
-The pipeline **core** is copied faithfully from the main app (same prompts, same JSON schemas, same
-retry/fallback chains, same 1:1 timing-writeback constraint, byte-faithful `WordCutPlanner`) — the whole
-point is to exercise the actual pipeline, not a reimplementation. The only surgery is de-tangling the
-pieces that hung off `EditorViewModel` into free functions, and reading the Gemini key from the
-environment (or the app's key field) instead of the app Keychain. The SwiftUI GUI and the multi-clip
-track model are built **on top of** that core; no external Swift package dependencies (system frameworks
-only: SwiftUI, AVKit, AVFoundation, Speech, Accelerate).
+A macOS SwiftUI app **and** headless CLI for LLM-assisted caption correction — an experiment lab where
+Apple's on-device speech recognition and Google Gemini cross-check each other to produce accurate,
+karaoke-timed, edit-ready captions for real-world (fast, mumbled, jargon-heavy, code-switching) speech.
 
-## Pipeline (7 stages, run per clip)
+Grown out of a [PalmierPro](https://github.com/palmier-io/palmier-pro) fork: the upstream app uses Apple
+`SpeechTranscriber` only; everything LLM-side here (content map, correction, re-listening, disfluency
+marking) is this lab's addition, developed in isolation so the pipeline can be measured, A/B-tested, and
+ported back. No external Swift package dependencies — system frameworks only (SwiftUI, AVFoundation,
+Speech, SoundAnalysis, Accelerate).
+
+## Architecture — perception / judgment / mechanics
 
 ```
-clip.mov + GEMINI_API_KEY
-  │
-  ├─[1] MediaDescriber.describeVideoContentMap (GeminiClient.describeVideo)
-  │        deep content map: [ContentSegment] (per-segment time range + visual + dialogue)
-  ├─[2] Transcription (Apple SpeechTranscriber / SpeechAnalyzer)
-  │        word-level ASR → TranscriptionResult (words with start/end, endpointed segments)
-  ├─[3] CaptionPipeline.contentMapGlossaryTerms
-  │        harvest proper nouns / domain terms the VLM heard → glossary
-  ├─[4] TranscriptCorrector.correct(_, glossary:)
-  │        Gemini TEXT correction 1:1 (homophones, brands, punctuation); corrected text written onto
-  │        ORIGINAL word timings via applyCorrectedText (stutters/false-starts PRESERVED here)
-  ├─[5] CaptionPipeline.retranscribeSuspectSpans
-  │        spans where ASR disagrees with the content map are re-transcribed with Gemini audio,
-  │        re-timed on syllable-nucleus energy peaks
-  ├─[6] CutStutters.plan → WordCutPlanner.cutRanges
-  │        decide which word indices are redundant disfluencies (LLM default, or heuristic), then
-  │        ripple-cut them into FrameRanges (per clip, within that clip's own frame span)
-  └─[7] TranscriptCorrector.applyCorrectedText
-           TIMING-PRESERVATION CHECK: corrected-text writeback preserves every original ASR word's
-           (start,end) exactly (PASS/FAIL)
+PERCEPTION   Apple SpeechTranscriber ──── per-word timings (the only clock)
+(two ears)   Gemini content map ────────── independent 2nd transcription + speakers + terms
+                                           (never shown the ASR text — no anchoring)
+                      │
+JUDGMENT     ONE Gemini text call: corrects mishearings (homophones, code-switching),
+(one pass)   adds punctuation, and emits ALL marks in the same judgment —
+             ¦ caption line breaks · ⟦term⟧ never-split terms · ⟨disfluency⟩ words to cut
+                      │
+MECHANICS    deterministic, no AI: 1:1 timing writeback (LCS-aligned), energy-peak
+(pure fn)    re-timing for recovered syllables, ripple-cut planning, valley-snapped
+(portable)   cut boundaries, caption chunking. Ports to any NLE.
 ```
 
-## Multi-clip track model
+Two semantic calls per clip, total (plus optional per-span re-listening). One judgment pass means the
+caption text and the cut list can never disagree.
 
-The app is built around a **Track** = an ordered, reorderable list of **Clips**. Each `ClipModel` owns its
-own video URL and its own full set of pipeline results (content map, ASR, glossary, correction diff,
-retranscribe rows, cut ranges, timing PASS/FAIL) plus per-clip stage progress. Drop one or more videos to
-append clips; add more anytime; drag to reorder; remove with the ✕. A single clip is just a track of one.
+### Pipeline stages
 
-The 7-stage pipeline runs **per clip** (each video gets its own Gemini content map / ASR / correction /
-retranscribe / stutter-cut), with clips processed **concurrently, capped at 2 at a time** so the Gemini
-API isn't hammered. Stage 6 is per-clip: `WordCutPlanner` takes `clipStart`/`clipEnd`, so the ripple stays
-within each clip.
+| # | Stage | Engine |
+|---|-------|--------|
+| 1 | Content map — watch the whole clip: verbatim dialogue blocks, speaker labels, summary, harvested terms | Gemini (video) |
+| 2 | ASR with pre-conditioning (normalize/compress; experimental slow-down for fast speech) | Apple, on-device |
+| 3 | Glossary — map-harvested terms merged with a manual list (no extra call) | — |
+| 4 | Correction — the one judgment pass (text + punctuation + ¦ + ⟦⟧ + ⟨⟩), count-locked to preserve timing | Gemini (text) |
+| 5 | Re-listen suspect spans where correction still disagrees with the map; splice + energy-peak re-timing | Gemini (audio, opt-in) |
+| 6 | Cut disfluencies — executes the ⟨⟩ marks mechanically; heuristic fallback offline | — |
+| 7 | Timing self-check — verifies 1:1 word-timing preservation (drift must be 0) | — |
 
-### Timeline & joined playback
+### Features
 
-- The waveform + word-chip timeline spans the whole track on **one global RAW time axis** (clip A then
-  clip B …), with dashed clip-boundary markers. Each clip's `AudioEnvelope` is concatenated for the track
-  waveform; each clip's words and translucent-red cut regions render in that clip's segment. Clicking a
-  word chip seeks playback to that word's **global** time; the playhead tracks playback.
-- Playback is an `AVMutableComposition` of the ordered clips, so the track plays as one seekable timeline.
-  A segmented toggle switches between **"Joined (raw)"** (full clips concatenated) and
-  **"Joined + cuts"** (each clip inserted MINUS its stutter/filler ranges — the real tightened result). A
-  composition↔raw-time map (`keptSegments`) converts between composition time and the raw global axis so
-  the playhead and chip-seeking stay correct in both modes.
-- Track totals show raw duration vs after-cuts duration and total seconds removed across all clips.
+- **Audio quality report** per clip: clipping %, SNR estimate, background-music spans (Apple SoundAnalysis).
+- **Speaker-aware caption breaks**: the map's speaker labels ride into correction, so a host→guest handoff
+  splits the caption even with zero pause — and cross-speaker echoes are never mistaken for stutters.
+- **Manual caption editor**: click a line to seek, edit in place (Enter splits a line), merge with next;
+  unchanged text keeps its timing, changed runs re-time on syllable energy peaks.
+- **Gemini usage/cost dashboard**: per-model token counts and cost estimates at official rates, per session.
+- **Qwen (MLX) forced-aligner A/B lane** for comparing timing backends (optional, `./setup.sh`).
+- **Annotated-transcript JSON** (`--dump-json`): segments carry text/start/end/captionBreaks/cutUnits —
+  a portable interchange document any NLE exporter (SRT, FCPXML, ripple cut list) can consume.
+- `--cli --audio-check <media>`: on-device diagnostics (quality, conditioning, ASR A/B) with no API key.
 
-## Qwen (MLX) forced-aligner — A/B timing backend
+### Requirements
 
-Two ways to get per-word/char timings, compared side by side:
+- Apple Silicon Mac, macOS 26+, **full Xcode** (SwiftUI macros need more than Command Line Tools)
+- `GEMINI_API_KEY` for the LLM stages (paste into the GUI field, or put it in `.env` — see `run.sh`)
 
-- **Apple ASR** (`SpeechTranscriber`): word/char timings from on-device recognition, with the corrected
-  text written back onto those timings **1:1** — but only where correction kept the word/token count, so
-  segments where correction changed count/boundaries keep the raw timing.
-- **Qwen (MLX)** (`mlx-community/Qwen3-ForcedAligner-0.6B-8bit` via `mlx-audio`): a forced aligner that
-  aligns the **FINAL corrected text directly to the audio** — its own clock, no Apple ASR, no 1:1-count
-  writeback limit — so it times exactly the text the pipeline produced, including the segments Apple's
-  path skips. Char-level Traditional Chinese timing confirmed (~1.2 s inference).
-
-A **Timing backend** selector (Apple only / Qwen only / Both) drives the timeline: in **Both**, two
-labeled clickable chip lanes ("Apple" / "Qwen") stack under the waveform so you can compare timing per
-token. The Qwen path shells out to a Python sidecar (`aligner/qwen_align.py`) in the repo's `.venv`; if
-the venv/script is missing the app shows a "run ./setup.sh" hint instead of failing. Enable it with:
-
-```bash
-./setup.sh
-```
-
-`setup.sh` creates `.venv` and installs `mlx-audio` (MLX only — no torch). The Qwen model (~hundreds of MB,
-8-bit) **auto-downloads on the first alignment run** (needs network once, then cached). Peak RAM is
-~**2.2 GB per alignment**, comfortable on an **M1 Pro / 16 GB**; the app serializes aligner runs so only one
-model is resident at a time. Clips longer than ~5 minutes exceed the aligner's single-pass limit — the app
-flags this and does **not** silently truncate. Override the Python/script paths with `CAPTIONLAB_PYTHON` /
-`CAPTIONLAB_ALIGNER`.
-
-The sidecar contract (stable): `qwen_align.py --audio <wav> --text <transcript> --language <lang>` prints
-`[{"text","start","end"}, …]` (seconds) to stdout; progress/logs go to stderr.
-
-## Build
-
-Full Xcode toolchain required (CommandLineTools lacks pieces the toolchain needs).
+### Build & run
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build
+./run.sh                       # GUI (sources .env, launches the app)
+swift run CaptionLab --cli <media> [--model gemini-pro-latest] [--dump-json out/]
+swift run CaptionLab --cli --audio-check <media>    # no key needed
 ```
 
-## Run — GUI (primary)
+### Field notes (see DEVLOG.md for the full lab log)
+
+- **Independence is the whole trick**: the content map never sees the ASR text, so its "second opinion" can
+  catch same-sounding errors that look plausible alone. Merging the two calls would save ~$0.003 and
+  destroy the mechanism.
+- **Count-lock**: correction may swap words but never add/remove syllables — that's what keeps Apple's
+  per-word clock intact (verified drift 0 across all test clips). Dropped syllables are the re-listen
+  stage's job instead.
+- **Negative results we paid for so you don't have to**: time-stretching fast speech before ASR *swaps*
+  errors instead of reducing them; a forced aligner (Qwen) produced worse timing than Apple's ASR
+  boundaries; per-word-list LLM cut decisions mis-cut CJK reduplications (常常) until cut marking moved
+  into the sentence-level judgment pass.
+
+Test clips are local media (never committed) referenced by neutral aliases in the dev log.
+
+### License
+
+GPL-3.0, same as upstream — see `LICENSE` and `NOTICE` for provenance.
+
+---
+
+# CaptionLab(繁體中文)
+
+一個 macOS SwiftUI app + 無頭 CLI 的 **LLM 輔助字幕校正實驗室**:讓 Apple 裝置端語音辨識與 Google
+Gemini **互相對質**,對真實世界的語音(講太快、含糊、術語密集、中英夾雜)產出準確、卡拉OK級對時、
+可直接剪輯的字幕。
+
+源自 [PalmierPro](https://github.com/palmier-io/palmier-pro) 的 fork:上游只用 Apple
+`SpeechTranscriber`;這裡所有 LLM 側的東西(content map、修正、補聽、贅詞標記)都是本實驗室加的,
+獨立開發以便量測、A/B 驗證,再回移。零外部套件依賴,只用系統框架。
+
+## 架構——感知 / 判斷 / 機械
+
+```
+感知(兩雙耳朵) Apple SpeechTranscriber ── 每字時間軸(唯一的時鐘)
+                Gemini content map ─────── 獨立第二聽 + 說話者 + 術語
+                                           (刻意不給它 ASR 文字——避免錨定)
+                      │
+判斷(只此一次) 一次 Gemini 文字呼叫:修聽錯(同音字、中英夾雜)、加標點,
+                並在同一次判斷裡輸出所有標記——
+                ¦ 字幕斷行 · ⟦術語⟧ 不可拆行 · ⟨贅詞⟩ 待剪
+                      │
+機械(純函數)   零 AI:1:1 時間回寫(LCS 對齊)、能量峰重配時間、
+                ripple 剪輯規劃、谷點修邊、字幕分行。可移植到任何 NLE。
+```
+
+每支 clip 固定**兩次**語意呼叫(+按需補聽)。判斷只做一次,所以字幕文字和剪單永遠一致。
+
+### Pipeline 七階段
+
+| # | 階段 | 引擎 |
+|---|------|------|
+| 1 | Content map——看完整支影片:逐字對白分塊、說話者標籤、摘要、術語清單 | Gemini(影片) |
+| 2 | ASR + 前置音訊調理(正規化/壓縮;快語音放慢為實驗選項) | Apple 裝置端 |
+| 3 | 詞彙表——map 挖出的術語 + 手動清單合併(不另外呼叫) | — |
+| 4 | 修正——唯一的判斷呼叫(文字+標點+¦+⟦⟧+⟨⟩),鎖字數保時間軸 | Gemini(文字) |
+| 5 | 補聽——修正後仍與 map 差很大的段落重聽、拼回、能量峰配時 | Gemini(音訊,可關) |
+| 6 | 剪贅詞——機械執行 ⟨⟩ 標記;離線時退回 heuristic | — |
+| 7 | 時間軸自檢——驗證每字時間 1:1 保留(drift 必須為 0) | — |
+
+### 功能
+
+- **音質報告**:每支 clip 的爆音 %、SNR 估計、背景音樂區段(Apple SoundAnalysis)。
+- **換人斷句**:map 的說話者標籤帶進修正,主持人→來賓零停頓交接也會切行;跨說話者的重複接話
+  不會被誤判成結巴。
+- **手動字幕編輯**:點時間跳播放、就地改字(Enter 切成兩行)、併入下一行;沒改的字保留原時間,
+  改過的段落用音節能量峰重配。
+- **Gemini 用量/費用儀表板**:按模型統計 token 與費用(官方費率)。
+- **Qwen(MLX)forced-aligner A/B 車道**(選配,`./setup.sh`)。
+- **標注逐字稿 JSON**(`--dump-json`):segment 帶 text/start/end/captionBreaks/cutUnits——
+  可攜的交換文件,任何 NLE 匯出器(SRT、FCPXML、剪單)都能吃。
+- `--cli --audio-check <media>`:純裝置端診斷(音質、調理、ASR A/B),不需要 API key。
+
+### 需求與建置
+
+- Apple Silicon、macOS 26+、**完整 Xcode**;LLM 階段需要 `GEMINI_API_KEY`(GUI 欄位或 `.env`)。
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift run CaptionLab [optional-media-path …]
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build
+./run.sh        # GUI
+swift run CaptionLab --cli <media> [--model gemini-pro-latest] [--dump-json out/]
 ```
 
-Launches a dark, pro-video-tool window: a drop zone / "Add files…" picker, a reorderable track list with
-per-clip stage dots, an AVKit video player with play + raw/cuts preview toggle, the global waveform/chip
-timeline, and a right-hand column with a `GEMINI_API_KEY` field (prefilled from `$GEMINI_API_KEY` if set),
-a glossary field, the retranscribe toggle, the stage-6 detector (LLM/heuristic) + aggressiveness pickers,
-a **Run pipeline** button, a **Re-cut** button (re-runs only stage 6 + the timing check after changing
-detector/aggressiveness), a PASS/FAIL timing badge, and per-clip result panels (cut summary, content map,
-glossary, correction diff, retranscribe). Any media path passed as an argument is preloaded as a clip.
+### 實驗筆記(完整記錄見 DEVLOG.md)
 
-## Run — CLI (`--cli`)
+- **獨立性就是火力來源**:content map 從不看 ASR 文字,它的第二意見才能抓到「單看很合理」的同音字錯。
+  合併兩次呼叫只省 ~$0.003,卻會毀掉整個機制。
+- **鎖字數**:修正可以換字、不可增刪音節——Apple 的每字時鐘因此無損(全部測試片 drift 0)。
+  掉音節交給補聽階段。
+- **付過學費的負面結果**:辨識前把快語音放慢是「換錯不減錯」;forced aligner(Qwen)的時間品質比
+  Apple ASR 邊界差;讓 LLM 看裸字清單決定剪誰會誤砍中文疊詞(常常)——直到剪標併入句子級判斷才根治。
 
-The original scriptable pipeline is preserved behind `--cli` (single clip):
+測試素材為本機媒體(從未 commit),開發記錄中以中性代號指涉。
 
-```bash
-export GEMINI_API_KEY=…
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  swift run CaptionLab --cli <path-to-media> [options]
-```
+### 授權
 
-| Option | Effect |
-| --- | --- |
-| `--glossary a,b` | Extra glossary terms, merged with harvested terms. |
-| `--no-retranscribe` | Skip stage 5. |
-| `--cut-heuristic` | Use the heuristic stutter/filler detector instead of the LLM (stage 6). |
-| `--aggressiveness tight\|balanced\|loose` | Stage-6 keep-gap (default balanced). |
-| `--model <m>` | Gemini model (default `gemini-flash-latest`). |
-| `--dump-json <dir>` | Write per-stage JSON. |
-| `--asr-json <file>` | Load a pre-exported `TranscriptionResult` instead of live ASR (see below). |
-| `--language <lang>` | Content-map description language (default `Traditional Chinese`). |
-| `--fps <n>` | Nominal fps for the stage-6 seconds↔frames conversion (default: read from the video, else 30). |
-
-## Stage 6 — cut stutters / disfluencies
-
-In the main app this decision is the LLM agent's (it reads the transcript and calls `remove_words`); this
-harness replicates that. `TranscriptCorrector` deliberately **preserves** stutters/false-starts, so they
-are still present after stage 4 and this is the stage that removes them. Two detectors:
-
-- **LLM (default):** a Gemini call sends the numbered word list and asks for the indices of redundant
-  stutter repeats / false starts / fillers to remove, **keeping the final clean instance of a repeated
-  run** and never removing meaningful words. Schema-locked `{"cut":[int]}` (same pattern as
-  `TranscriptCorrector`). Falls back to the heuristic if every attempt fails.
-- **Heuristic (`--cut-heuristic`):** mark consecutive duplicate words (same normalized text) except the
-  last in each run, plus any word in the app's byte-faithful `defaultFillers` set.
-
-`WordCutPlanner` is byte-faithful and works in **frames** with `clipStart`/`clipEnd`; the ASR words are in
-**seconds**. All unit conversion lives in the `CutStutters.plan` wrapper: seconds→frames for the planner
-input (nominal fps = the video's `nominalFrameRate` if readable, else 30), and the resulting cut
-frame-ranges→seconds for display + "seconds saved". `CutAggressiveness` (tight/balanced/loose) maps to the
-planner's keep-gap.
-
-## `GEMINI_API_KEY`
-
-Required for stages 1, 3, 4, 5, and the LLM stage-6 detector — all call the direct Google Gemini API
-(`generativelanguage.googleapis.com`). In the GUI, paste it into the key field (prefilled from the env if
-set); the app injects it into the process environment before running so `GeminiClient` stays byte-faithful
-(it still reads `$GEMINI_API_KEY`). The CLI reads it straight from the environment.
-
-## Speech authorization caveat + `--asr-json` fallback
-
-Stage 2 uses the modern `SpeechTranscriber` / `SpeechAnalyzer` API, which (per the main app's verified
-note, kept in the extracted code) resolves locales and transcribes **without** an `SFSpeechRecognizer`
-authorization gate — so ASR can work without a mic-usage prompt; the on-device model downloads on first
-use. Running the GUI via `swift run` (no `.app` bundle / Info.plist) prints a benign AVKit runtime log
-(`failed to demangle superclass … AVPlayerView`) and, if a given machine's speech XPC service refuses a
-non-bundled client, stage 2 fails for that clip with a clear message. In that case the CLI's
-`--asr-json <file>` loads a pre-exported `TranscriptionResult` so stages 3–7 run fully offline; `--dump-json`
-writes `asr.json` in exactly that shape. If you ever need a mic/speech usage-description string, run from a
-real `.app` bundle (`swift run` executables can't embed an Info.plist) — not required for file-based ASR.
+GPL-3.0(與上游一致)——見 `LICENSE` 與 `NOTICE`。
