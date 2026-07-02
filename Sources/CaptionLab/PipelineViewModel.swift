@@ -456,7 +456,7 @@ final class PipelineViewModel {
         // [6] Cut stutters (per clip; WordCutPlanner runs within this clip's own frame span)
         clip.mark(6, .running)
         clip.cut = await CutStutters.plan(words: working.words, fps: clip.fps,
-                                          aggressiveness: aggressiveness, detector: cutDetector, url: clip.url)
+                                          aggressiveness: aggressiveness, detector: cutDetector, url: clip.url, model: model)
         clip.mark(6, .done)
 
         // [7] Timing-preservation check
@@ -524,7 +524,7 @@ final class PipelineViewModel {
                         await MainActor.run { clip.mark(6, .running) }
                         let words = await MainActor.run { clip.afterRetranscribe?.words ?? [] }
                         let fps = await MainActor.run { clip.fps }
-                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector)
+                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector, model: self.model)
                         await MainActor.run { clip.cut = r; clip.mark(6, .done) }
                     }
                 }

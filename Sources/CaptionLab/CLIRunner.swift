@@ -244,7 +244,7 @@ enum CLIRunner {
         header(6, "CUT STUTTERS / DISFLUENCIES (WordCutPlanner)")
         let cut = await CutStutters.plan(words: working.words, fps: fps,
                                          aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .llm,
-                                         url: mediaURL)
+                                         url: mediaURL, model: model)
         if cut.llmFellBack { print("(LLM cut detector failed — fell back to heuristic.)") }
         print("detector=\(cut.mode.rawValue)  fps=\(String(format: "%.3f", fps))  cut \(cut.cutWords.count) word(s) → \(String(format: "%.2f", cut.secondsSaved))s removed across \(cut.cutRangesSeconds.count) range(s)")
         for (idx, w) in zip(cut.cutIndices, cut.cutWords) {

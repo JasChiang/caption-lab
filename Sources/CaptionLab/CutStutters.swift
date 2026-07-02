@@ -34,13 +34,14 @@ enum CutStutters {
 
     static func plan(
         words: [TranscriptionWord], fps: Double,
-        aggressiveness: CutAggressiveness, detector: Detector, url: URL? = nil
+        aggressiveness: CutAggressiveness, detector: Detector, url: URL? = nil,
+        model: String = GeminiClient.defaultModel
     ) async -> Result {
         var llmFellBack = false
         var mode = detector
         var indices: [Int]
         if detector == .llm {
-            if let llm = await llmCutIndices(words: words) {
+            if let llm = await llmCutIndices(words: words, model: model) {
                 indices = llm
             } else {
                 llmFellBack = true; mode = .heuristic
@@ -93,17 +94,24 @@ enum CutStutters {
     /// repeats / false starts / fillers to remove, KEEPING the final clean instance of a repeated run.
     /// Structured JSON `{"cut":[int]}` (same schema-locked pattern as TranscriptCorrector). Returns nil if
     /// every attempt fails, so the caller can fall back to the heuristic.
-    static func llmCutIndices(words: [TranscriptionWord]) async -> [Int]? {
+    /// Cut decisions are a semantic judgment — run them on the PIPELINE's model (they were stuck on
+    /// flash-lite, which is how 常常 got treated as a stutter), same escalation as the retranscribe re-listen.
+    static func llmCutIndices(words: [TranscriptionWord], model: String = GeminiClient.defaultModel) async -> [Int]? {
         guard !words.isEmpty else { return [] }
         let numbered = words.enumerated().map { "\($0). \($1.text)" }.joined(separator: "\n")
         let system = """
         You are cleaning a speech transcript for a video editor that ripple-DELETES the words you name. \
-        Each line is `index. word`. Return the indices of words that are REDUNDANT DISFLUENCIES safe to \
+        Each line is `index. word`. NOTE: Chinese is listed ONE CHARACTER PER LINE, so a two-character word \
+        spans two consecutive indices. Return the indices of words that are REDUNDANT DISFLUENCIES safe to \
         remove without changing meaning: stutter repeats and false starts (在 in 在在在 or 去去去去 — keep \
         only the LAST, clean instance of the repeated run), abandoned restarts, and filler words \
-        (um, uh, er, 嗯, 呃). Do NOT remove meaningful repetition (deliberate emphasis like 很好很好, or a \
-        repeated word that carries meaning), and never remove a word that is part of the actual sentence. \
-        When several identical words run consecutively, keep the final one and cut the earlier duplicates. \
+        (um, uh, er, 嗯, 呃). CRITICAL: a doubled Chinese character that forms a standard REDUPLICATED WORD \
+        (常常, 剛剛, 慢慢, 好好, 天天, 往往, 漸漸, 稍稍, 輕輕…) is a legitimate word, NOT a stutter — two \
+        identical adjacent characters are only a stutter when the context clearly reads as a restart; when \
+        in doubt about an exact pair, KEEP both. Do NOT remove meaningful repetition (deliberate emphasis \
+        like 很好很好, or a repeated word that carries meaning), and never remove a word that is part of the \
+        actual sentence. When a genuine stutter run of identical words occurs, keep the final one and cut \
+        the earlier duplicates. \
         Return a JSON object {"cut":[…]} whose `cut` array holds the integer indices to remove (may be empty).
         """
         let prompt = "Word list (index. word):\n\(numbered)"
@@ -114,7 +122,7 @@ enum CutStutters {
         ]
         for attempt in 0..<3 {
             if let r = try? await GeminiClient.completeWithUsage(prompt: prompt, system: system,
-                                                                 model: GeminiClient.textModel,
+                                                                 model: model,
                                                                  maxTokens: 4000, responseSchema: schema),
                let data = r.text.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -164,10 +172,13 @@ enum CutStutters {
         var i = 0
         while i < words.count {
             let n = norm(words[i].text)
-            // A run of consecutive identical words: cut all but the last.
+            // A run of consecutive identical words: cut all but the last. EXCEPT an exact PAIR of one CJK
+            // character — that's almost always a legitimate reduplicated word (常常/剛剛/慢慢), not a stutter;
+            // real CJK stutters run 3+ (去去去去). English pairs ("the the") stay cut.
             var j = i
             while j + 1 < words.count, norm(words[j + 1].text) == n, !n.isEmpty { j += 1 }
-            if j > i { cut.append(contentsOf: i..<j) }   // keep index j (the last), cut i..<j
+            let cjkPair = (j == i + 1) && n.count == 1 && n.first.map(CaptionBuilder.isCJKChar) == true
+            if j > i, !cjkPair { cut.append(contentsOf: i..<j) }   // keep index j (the last), cut i..<j
             // Fillers (single words) — cut every occurrence not already covered.
             for k in i...j where fillers.contains(norm(words[k].text)) && !cut.contains(k) { cut.append(k) }
             i = j + 1
