@@ -10,8 +10,11 @@ enum GeminiClient {
     /// is plenty, faster, cheaper, AND less congested — the 503s hit the heavy flash models, not lite.
     static let textModel = "gemini-flash-lite-latest"
     /// Tried in order when a request hits a TRANSIENT error (503/429/500/timeout/empty), so one overloaded
-    /// model doesn't fail the call. The requested model is tried first; these fill in after it.
-    private static let fallbackChain = ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    /// model doesn't fail the call. The requested model is tried first; these fill in after it, STRONGEST
+    /// first so quality degrades gracefully — the old lite-first order (picked because lite is least
+    /// congested) could silently downgrade a pro content map to flash-lite on a busy day. The usage
+    /// dashboard records the model that actually served, so any downgrade is visible.
+    private static let fallbackChain = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
     private static let base = "https://generativelanguage.googleapis.com"
 
     enum GeminiError: LocalizedError {
@@ -79,7 +82,7 @@ enum GeminiClient {
     /// dialogue for this window) nudges proper nouns without being treated as the answer. Returns the spoken
     /// text only. Uses the cheap/uncongested text-tier model by default; the fallback chain still applies.
     static func transcribeAudio(fileURL: URL, mimeType: String = "audio/mp4",
-                                biasHint: String? = nil, model: String = textModel) async throws -> String {
+                                biasHint: String? = nil, model: String = defaultModel) async throws -> String {
         let hint = (biasHint?.isEmpty == false)
             ? " The speech is roughly about: \"\(biasHint!.prefix(200))\" — use it only to disambiguate proper nouns/terms, never to paraphrase."
             : ""
