@@ -20,7 +20,7 @@ struct TimelineView: View {
     private var total: Double { max(vm.totalRawDuration, 0.001) }
     private var contentWidth: CGFloat { max(CGFloat(total) * pxPerSec, 240) }
 
-    private struct Chip: Identifiable { let id = UUID(); let x: CGFloat; let w: CGFloat; let text: String; let cut: Bool; let global: Double }
+    private struct Chip { let x: CGFloat; let w: CGFloat; let text: String; let cut: Bool; let global: Double }
     private struct Band { let x: CGFloat; let w: CGFloat }
 
     var body: some View {
@@ -36,9 +36,12 @@ struct TimelineView: View {
                         if showApple { chipLane(appleChips, lane: 0) }
                         if showQwen { chipLane(qwenChips, lane: showApple ? 1 : 0) }
 
-                        Rectangle().fill(Theme.text)
-                            .frame(width: 1.5, height: totalH)
-                            .position(x: CGFloat(vm.currentTime) * pxPerSec, y: totalH / 2)
+                        // ISOLATED playhead: the ONLY view here that reads vm.currentTime. @Observable
+                        // invalidates per body that touched a property — if the playhead lived in THIS body,
+                        // the whole timeline (hundreds of chips + waveform Canvas) would rebuild 33×/s during
+                        // playback, pinning the main thread (video freezes, clicks go dead) while audio
+                        // (AVPlayer, off-main) kept going.
+                        PlayheadBar(vm: vm, pxPerSec: pxPerSec, height: totalH)
                     }
                     .frame(width: contentWidth, height: totalH)
                 }
@@ -46,6 +49,17 @@ struct TimelineView: View {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.stroke))
             }
             .frame(height: totalH + 12)
+        }
+    }
+
+    private struct PlayheadBar: View {
+        var vm: PipelineViewModel
+        let pxPerSec: CGFloat
+        let height: CGFloat
+        var body: some View {
+            Rectangle().fill(Theme.text)
+                .frame(width: 1.5, height: height)
+                .position(x: CGFloat(vm.currentTime) * pxPerSec, y: height / 2)
         }
     }
 
@@ -77,9 +91,11 @@ struct TimelineView: View {
 
     // MARK: Chip lane
 
+    // Positional identity (stable across re-evaluations) — the old `id = UUID()` minted new IDs every body
+    // pass, making SwiftUI treat every chip as removed+reinserted on each rebuild.
     private func chipLane(_ chips: [Chip], lane: Int) -> some View {
         let yCenter = waveH + CGFloat(lane) * laneH + laneH / 2
-        return ForEach(chips) { chip in
+        return ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
             Text(chip.text)
                 .font(Theme.mono(10))
                 .foregroundStyle(chip.cut ? Theme.cut : Theme.text)

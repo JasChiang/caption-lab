@@ -103,26 +103,13 @@ struct ContentView: View {
         VStack(spacing: Theme.Space.sm) {
             AVPlayerViewRepresentable(player: vm.player)
                 .frame(minHeight: 240)
-                .overlay(alignment: .bottom) {
-                    if !vm.currentCaption.isEmpty {
-                        Text(vm.currentCaption)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
-                            .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
-                            .padding(.bottom, 16)
-                            .allowsHitTesting(false)
-                    }
-                }
+                .overlay(alignment: .bottom) { CaptionOverlay(vm: vm) }
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.stroke))
 
             HStack(spacing: Theme.Space.md) {
                 Button { vm.togglePlay() } label: { Image(systemName: "playpause.fill") }
-                Text(String(format: "%@ / %@", tc(vm.currentTime), tc(vm.previewCutsApplied ? vm.totalCutDuration : vm.totalRawDuration)))
-                    .font(Theme.mono(11)).foregroundStyle(Theme.dim)
+                TimeReadout(vm: vm)
                 Spacer()
                 Picker("", selection: Binding(get: { vm.previewCutsApplied }, set: { vm.setPreviewCutsApplied($0) })) {
                     Text("Joined (raw)").tag(false)
@@ -149,6 +136,34 @@ struct ContentView: View {
             Text(label).font(Theme.ui(11)).foregroundStyle(Theme.faint)
             Text(value).font(Theme.mono(12, .semibold)).foregroundStyle(color)
         }
+    }
+}
+
+// ISOLATED 33Hz views: these two are the only ContentView pieces reading vm.currentTime /
+// vm.currentCaption. Inlining them in ContentView.body made the WHOLE left pane re-evaluate on every
+// playhead tick during playback (same class of bug as the timeline playhead).
+private struct CaptionOverlay: View {
+    var vm: PipelineViewModel
+    var body: some View {
+        if !vm.currentCaption.isEmpty {
+            Text(vm.currentCaption)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
+                .padding(.bottom, 16)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+private struct TimeReadout: View {
+    var vm: PipelineViewModel
+    var body: some View {
+        Text(String(format: "%@ / %@", tc(vm.currentTime), tc(vm.previewCutsApplied ? vm.totalCutDuration : vm.totalRawDuration)))
+            .font(Theme.mono(11)).foregroundStyle(Theme.dim)
     }
 }
 
