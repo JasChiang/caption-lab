@@ -148,7 +148,15 @@ final class PipelineViewModel {
     /// where sentences end. Instead we break each corrected SEGMENT's display units at the LLM's ¦ break
     /// hints (semantic, style-agnostic) when present, else at punctuation, always capped so no line
     /// overflows — and map each chunk back onto its words' timings. Times are global raw seconds.
-    func captionLines() -> [CaptionLine] {
+    private var captionLineCache: [CaptionLine] = []
+
+    /// Cached caption lines — returned to `currentCaption` on every playhead tick. Rebuilt only when results
+    /// or clip layout change (`rebuildCaptionCache`), NOT per frame: recomputing the whole list ~33×/s during
+    /// playback previously pegged the CPU and made the GUI sluggish.
+    func captionLines() -> [CaptionLine] { captionLineCache }
+
+    /// Recompute the caption-line cache from current clip results. Cheap; call whenever results/layout change.
+    func rebuildCaptionCache() {
         var lines: [CaptionLine] = []
         for (idx, clip) in clips.enumerated() {
             let off = rawOffset(of: idx)
@@ -189,7 +197,7 @@ final class PipelineViewModel {
                 }
             }
         }
-        return lines
+        captionLineCache = lines
     }
 
     /// Unit indices to break AFTER (the list always ends at `du.count`): the LLM's ¦ hints when present, else
@@ -333,6 +341,7 @@ final class PipelineViewModel {
         keptSegments = map
         installTimeObserver()
         player.replaceCurrentItem(with: AVPlayerItem(asset: comp))
+        rebuildCaptionCache()
     }
 
     /// Complement of `cuts` within `[bounds]` → the kept sub-ranges, in order.
@@ -481,6 +490,7 @@ final class PipelineViewModel {
         clip.timingDrift = max(0, drift)
         clip.timingPass = (drift == 0)
         clip.mark(7, drift == 0 ? .done : .failed("timing drift"))
+        rebuildCaptionCache()   // this clip's captions are ready — refresh without waiting for the batch end
 
         // Qwen (MLX) forced-aligner backend — aligns the FINAL corrected text directly to audio.
         if alignerMode.runsQwen { await alignQwen(clip, text: working.text, language: working.language) }
