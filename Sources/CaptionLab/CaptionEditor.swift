@@ -113,7 +113,15 @@ extension PipelineViewModel {
         // `total` is ignored by captionStops' filter but keeps the list non-empty, so the punctuation
         // fallback can't re-split a line the user deliberately merged/unified.
         if breaks.isEmpty { breaks = [total] }
-        segs[chunk.segIndex] = TranscriptionSegment(text: newSegText, start: seg.start, end: seg.end, captionBreaks: breaks)
+        // Shift the corrector's ⟨⟩ cut marks the same way; marks inside the edited span are dropped (the
+        // user rewrote that text — stale disfluency positions would cut the wrong words).
+        let cutUnits: [Int] = seg.cutUnits.compactMap { u in
+            if u < chunk.unitLo { return u }
+            if u >= chunk.unitHi { return u + delta }
+            return nil
+        }
+        segs[chunk.segIndex] = TranscriptionSegment(text: newSegText, start: seg.start, end: seg.end,
+                                                    captionBreaks: breaks, cutUnits: cutUnits)
 
         // Re-propagate text onto word timings: unchanged text keeps its timing (LCS), changed runs re-time
         // on syllable energy peaks within their span.
@@ -136,7 +144,8 @@ extension PipelineViewModel {
             let total = CaptionBuilder.units(seg.text, keepPunctuation: false).count
             var breaks = seg.captionBreaks.filter { $0 != a.unitHi }
             if breaks.filter({ $0 > 0 && $0 < total }).isEmpty { breaks = [total] }   // sentinel (see above)
-            segs[a.segIndex] = TranscriptionSegment(text: seg.text, start: seg.start, end: seg.end, captionBreaks: breaks)
+            segs[a.segIndex] = TranscriptionSegment(text: seg.text, start: seg.start, end: seg.end,
+                                                    captionBreaks: breaks, cutUnits: seg.cutUnits)
         } else {
             guard b.segIndex == a.segIndex + 1 else { return }
             let s1 = segs[a.segIndex], s2 = segs[b.segIndex]
@@ -146,8 +155,10 @@ extension PipelineViewModel {
             var breaks = s1.captionBreaks.filter { $0 > 0 && $0 < c1 }
                 + s2.captionBreaks.map { $0 + c1 }.filter { $0 > c1 && $0 < total }
             if breaks.isEmpty { breaks = [total] }
+            let cutUnits = s1.cutUnits.filter { $0 < c1 } + s2.cutUnits.map { $0 + c1 }
             segs[a.segIndex] = TranscriptionSegment(text: CaptionBuilder.joinUnits([s1.text, s2.text]),
-                                                    start: s1.start, end: s2.end, captionBreaks: breaks.sorted())
+                                                    start: s1.start, end: s2.end,
+                                                    captionBreaks: breaks.sorted(), cutUnits: cutUnits)
             segs.remove(at: b.segIndex)
         }
         commit(segs, words: result.words, from: result, to: clip)

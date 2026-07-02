@@ -17,6 +17,11 @@ struct TranscriptionSegment: Sendable, Codable {
     /// break, suggested by the correction LLM in the same call (semantic, style-agnostic breaks that a
     /// punctuation/pause heuristic can't match). Empty when unavailable — callers fall back to punctuation.
     var captionBreaks: [Int] = []
+    /// Unit indices the corrector marked as REMOVABLE DISFLUENCIES (⟨⟩: stutter repeats, false starts,
+    /// fillers) in the SAME judgment pass that corrected and broke the text — one semantic pass, so the cut
+    /// list can never disagree with the caption. The words stay in the text (count-lock intact); stage 6
+    /// removes them from the AUDIO mechanically.
+    var cutUnits: [Int] = []
 }
 
 struct TranscriptionResult: Sendable, Codable {
@@ -44,7 +49,8 @@ struct TranscriptionResult: Sendable, Codable {
                 TranscriptionWord(text: $0.text, start: $0.start.map { $0 + offset }, end: $0.end.map { $0 + offset })
             },
             segments: segments.map {
-                TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+                TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset,
+                                     captionBreaks: $0.captionBreaks, cutUnits: $0.cutUnits)
             },
             atomicTerms: atomicTerms,
             conditionReport: conditionReport

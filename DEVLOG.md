@@ -4,6 +4,32 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-02 (i) — ONE semantic pass: cut decisions fold into the corrector (de-overfit)
+
+User pushback (correct): the 常常 reduplication whitelist was whack-a-mole, and stage 6's LLM was the only
+semantic judgment that saw NO sentence context (a bare one-char-per-line word list). Restructured to the
+general architecture — perception / judgment / mechanics:
+
+- **Judgment happens ONCE** (stage 4): the corrector now also wraps removable disfluencies in ⟨ ⟩ (it already
+  had to identify them to preserve them). New `TranscriptionSegment.cutUnits` carries the marks alongside
+  `captionBreaks` — corrections, breaks, atomic terms and cuts are one consistent judgment; the cut list can
+  never disagree with the caption text.
+- **Stage 6 is now pure mechanics**: `llmCutIndices` DELETED (one fewer Gemini call per clip); `Detector.llm`
+  → `.marks` (`indicesFromMarks` maps segment cutUnits → global word indices positionally); heuristic remains
+  the offline/no-marks fallback (`fellBack` when marks were requested but correction failed). The reduplication
+  whitelist prompt died with llmCutIndices; the heuristic's CJK-pair rule stays (a linguistic fact, not a patch:
+  real CJK stutters run 3+, pairs are reduplications).
+- **Annotation document**: `--dump-json`'s corrected.json/final.json now IS the portable annotated transcript
+  (segments carry text/start/end/captionBreaks/cutUnits + words) — the interchange format an NLE (PalmierPro)
+  consumes; exporters (SRT/FCPXML/remove_words) are pure functions of it.
+- Manual edits preserve/shift cutUnits like breaks (marks inside an edited span are dropped as stale).
+- Retranscribed spans get fresh text with empty cutUnits (old marks would be stale — correct behavior).
+
+Verify on the Mac: rerun a disfluent clip (受訪者A/講者B) — CUT SUMMARY should show mode "marks", stutters cut,
+常常-class words kept; 朗讀者C should show few/no cuts. GUI picker now "Corrector marks (default) / Heuristic".
+
+---
+
 ## Session 2026-07-02 (h) — manual caption editing + Gemini cost dashboard
 
 1. **Manual caption editing** (`CaptionEditor.swift` + CAPTION LINES card in ResultsPanels). Edit a line in a

@@ -79,7 +79,12 @@ enum TranscriptCorrector {
         CRITICAL: KEEP every repeated word, stutter, and false start EXACTLY as transcribed — 去去去去 stays \
         去去去去, 進進 stays 進進, "the the" stays "the the". These are NOT recognition errors; a SEPARATE edit \
         pass removes them from the audio, so the caption must still contain them or it won't match what's \
-        spoken. Never collapse a stutter (去去去去進進行 must NOT become 進行). Keep the ORIGINAL \
+        spoken. Never collapse a stutter (去去去去進進行 must NOT become 進行). ALSO wrap each REMOVABLE \
+        DISFLUENCY you kept in ⟨ ⟩ so the editor can cut those words from the AUDIO: the redundant repeats of \
+        a stutter run (keep the final clean instance unwrapped — 去去去去進行 becomes ⟨去去去⟩去進行), an \
+        abandoned false start, and pure fillers (嗯, 呃, um, uh). Wrap ONLY what can be deleted without \
+        changing meaning: a reduplicated word that is a real word, deliberate emphasis, or any word the \
+        sentence needs must NOT be wrapped. ⟨ ⟩ never changes the characters inside. Keep the ORIGINAL \
         language. Also wrap any multi-character TERM that must never be split across two caption lines — a \
         technical term, proper noun, or fixed compound phrase (e.g. ⟦退化性關節炎⟧, ⟦iPhone⟧) — in ⟦ ⟧. \
         Wrap only genuine terms, never ordinary word sequences, and never change the characters inside. \
@@ -118,16 +123,20 @@ enum TranscriptCorrector {
         // strip both so segment text stays clean and keeps unit-for-unit alignment with the ASR words.
         var atomicTerms: Set<String> = []
         var segBreaks: [[Int]] = []
+        var segCuts: [[Int]] = []
         let corrected = marked.map { line -> String in
             atomicTerms.formUnion(Self.extractTerms(line))
             let noTerms = line.replacingOccurrences(of: "\u{27E6}", with: "").replacingOccurrences(of: "\u{27E7}", with: "")
-            let (clean, breaks) = extractCaptionBreaks(noTerms)
+            let (noCuts, cuts) = extractCutMarks(noTerms)
+            segCuts.append(cuts)
+            let (clean, breaks) = extractCaptionBreaks(noCuts)
             segBreaks.append(breaks)
             return clean
         }
 
         let newSegs = zip(segs, corrected).enumerated().map { i, pair in
-            TranscriptionSegment(text: pair.1, start: pair.0.start, end: pair.0.end, captionBreaks: segBreaks[i])
+            TranscriptionSegment(text: pair.1, start: pair.0.start, end: pair.0.end,
+                                 captionBreaks: segBreaks[i], cutUnits: segCuts[i])
         }
         // With the source audio we can re-time words the recognizer never emitted (a recovered HDMI 2.1 / a
         // dropped syllable) onto energy peaks, so they land on the timeline instead of only in the segment text.
@@ -157,6 +166,29 @@ enum TranscriptCorrector {
             }
         }
         return (clean.trimmingCharacters(in: .whitespaces), breaks)
+    }
+
+    /// Pulls the ⟨ ⟩ disfluency marks out of a line: returns the text with markers stripped and the unit
+    /// indices (punctuation-ignored, the same space as captionBreaks) of the marked units. Unit indices are
+    /// unaffected by any ¦ still in the text (¦ is not alphanumeric, so it never forms a unit).
+    private static func extractCutMarks(_ line: String) -> (text: String, cutUnits: [Int]) {
+        var clean = ""
+        var cuts: Set<Int> = []
+        var spanStart: Int? = nil
+        for ch in line {
+            if ch == "\u{27E8}" {
+                spanStart = CaptionBuilder.units(clean, keepPunctuation: false).count
+            } else if ch == "\u{27E9}" {
+                if let s0 = spanStart {
+                    let e0 = CaptionBuilder.units(clean, keepPunctuation: false).count
+                    if e0 > s0 { cuts.formUnion(s0..<e0) }
+                }
+                spanStart = nil
+            } else {
+                clean.append(ch)
+            }
+        }
+        return (clean, cuts.sorted())
     }
 
     /// Multi-character substrings the LLM wrapped in ⟦ ⟧ on one line.

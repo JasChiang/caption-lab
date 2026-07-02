@@ -44,7 +44,7 @@ struct ControlsPanel: View {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 fieldLabel("Detector")
                 Picker("", selection: $vm.cutDetector) {
-                    Text("LLM (default)").tag(CutStutters.Detector.llm)
+                    Text("Corrector marks (default)").tag(CutStutters.Detector.marks)
                     Text("Heuristic").tag(CutStutters.Detector.heuristic)
                 }.pickerStyle(.segmented).labelsHidden()
 

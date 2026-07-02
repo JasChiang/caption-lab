@@ -17,7 +17,9 @@ enum CutStutters {
     // them orphans the preceding character.
     static let defaultFillers: Set<String> = ["um", "uh", "uhh", "uhm", "umm", "er", "err", "erm", "ah", "hmm", "mm", "mhm", "嗯", "呃"]
 
-    enum Detector: String, Sendable, CaseIterable { case llm, heuristic }
+    /// `marks` consumes the corrector's ⟨⟩ disfluency marks (ONE semantic pass owns correction, breaks AND
+    /// cuts — see TranscriptCorrector); `heuristic` is the offline/no-marks fallback.
+    enum Detector: String, Sendable, CaseIterable { case marks, heuristic }
 
     struct Result: Sendable {
         let mode: Detector
@@ -29,25 +31,44 @@ enum CutStutters {
         let keptWords: [TranscriptionWord]
         /// The words that were cut, for display.
         let cutWords: [TranscriptionWord]
-        let llmFellBack: Bool
+        /// True when `marks` was requested but no marks were available (correction failed) → heuristic ran.
+        let fellBack: Bool
+    }
+
+    /// Global word indices from the corrector's per-segment ⟨⟩ marks — pure bookkeeping, no model call.
+    /// Positional unit↔word mapping within each segment, the same approximation captions use.
+    static func indicesFromMarks(result: TranscriptionResult) -> [Int] {
+        var out: [Int] = []
+        var wi = 0
+        let words = result.words
+        for seg in result.segments {
+            var segIdx: [Int] = []
+            while wi < words.count {
+                let w = words[wi]
+                guard let s = w.start, let e = w.end else { wi += 1; continue }   // untimed → uncuttable
+                let mid = (s + e) / 2
+                if mid < seg.start { wi += 1; continue }
+                if mid >= seg.end { break }
+                segIdx.append(wi); wi += 1
+            }
+            for u in seg.cutUnits where u >= 0 && u < segIdx.count { out.append(segIdx[u]) }
+        }
+        return out.sorted()
     }
 
     static func plan(
         words: [TranscriptionWord], fps: Double,
         aggressiveness: CutAggressiveness, detector: Detector, url: URL? = nil,
-        model: String = GeminiClient.defaultModel
+        marks: [Int]? = nil
     ) async -> Result {
-        var llmFellBack = false
+        var fellBack = false
         var mode = detector
         var indices: [Int]
-        if detector == .llm {
-            if let llm = await llmCutIndices(words: words, model: model) {
-                indices = llm
-            } else {
-                llmFellBack = true; mode = .heuristic
-                indices = heuristicCutIndices(words: words)
-            }
+        if detector == .marks, let marks {
+            indices = marks
         } else {
+            if detector == .marks { fellBack = true }
+            mode = .heuristic
             indices = heuristicCutIndices(words: words)
         }
         let cutSet = Set(indices.filter { $0 >= 0 && $0 < words.count })
@@ -87,52 +108,13 @@ enum CutStutters {
         let kept = words.enumerated().filter { !cutSet.contains($0.offset) }.map(\.element)
         let cut = words.enumerated().filter { cutSet.contains($0.offset) }.map(\.element)
         return Result(mode: mode, cutIndices: cutSet.sorted(), cutRangesSeconds: rangesSeconds,
-                      secondsSaved: secondsSaved, keptWords: kept, cutWords: cut, llmFellBack: llmFellBack)
+                      secondsSaved: secondsSaved, keptWords: kept, cutWords: cut, fellBack: fellBack)
     }
 
-    /// LLM detector (default): send the numbered word list and ask for the indices of redundant stutter
-    /// repeats / false starts / fillers to remove, KEEPING the final clean instance of a repeated run.
-    /// Structured JSON `{"cut":[int]}` (same schema-locked pattern as TranscriptCorrector). Returns nil if
-    /// every attempt fails, so the caller can fall back to the heuristic.
-    /// Cut decisions are a semantic judgment — run them on the PIPELINE's model (they were stuck on
-    /// flash-lite, which is how 常常 got treated as a stutter), same escalation as the retranscribe re-listen.
-    static func llmCutIndices(words: [TranscriptionWord], model: String = GeminiClient.defaultModel) async -> [Int]? {
-        guard !words.isEmpty else { return [] }
-        let numbered = words.enumerated().map { "\($0). \($1.text)" }.joined(separator: "\n")
-        let system = """
-        You are cleaning a speech transcript for a video editor that ripple-DELETES the words you name. \
-        Each line is `index. word`. NOTE: Chinese is listed ONE CHARACTER PER LINE, so a two-character word \
-        spans two consecutive indices. Return the indices of words that are REDUNDANT DISFLUENCIES safe to \
-        remove without changing meaning: stutter repeats and false starts (在 in 在在在 or 去去去去 — keep \
-        only the LAST, clean instance of the repeated run), abandoned restarts, and filler words \
-        (um, uh, er, 嗯, 呃). CRITICAL: a doubled Chinese character that forms a standard REDUPLICATED WORD \
-        (常常, 剛剛, 慢慢, 好好, 天天, 往往, 漸漸, 稍稍, 輕輕…) is a legitimate word, NOT a stutter — two \
-        identical adjacent characters are only a stutter when the context clearly reads as a restart; when \
-        in doubt about an exact pair, KEEP both. Do NOT remove meaningful repetition (deliberate emphasis \
-        like 很好很好, or a repeated word that carries meaning), and never remove a word that is part of the \
-        actual sentence. When a genuine stutter run of identical words occurs, keep the final one and cut \
-        the earlier duplicates. \
-        Return a JSON object {"cut":[…]} whose `cut` array holds the integer indices to remove (may be empty).
-        """
-        let prompt = "Word list (index. word):\n\(numbered)"
-        let schema: [String: Any] = [
-            "type": "object",
-            "properties": ["cut": ["type": "array", "items": ["type": "integer"]]],
-            "required": ["cut"],
-        ]
-        for attempt in 0..<3 {
-            if let r = try? await GeminiClient.completeWithUsage(prompt: prompt, system: system,
-                                                                 model: model,
-                                                                 maxTokens: 4000, responseSchema: schema),
-               let data = r.text.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if let cut = obj["cut"] as? [Int] { return cut }
-                if let cut = obj["cut"] as? [Double] { return cut.map { Int($0) } }
-            }
-            if attempt < 2 { try? await Task.sleep(nanoseconds: 600_000_000) }
-        }
-        return nil
-    }
+    // NOTE: the old per-word LLM cut detector is GONE by design. Cut decisions belong to the ONE semantic
+    // pass in TranscriptCorrector (which reads full sentences with references and marks disfluencies with
+    // ⟨⟩); this stage only executes those marks mechanically. A second model judging a bare one-char-per-line
+    // word list is what mis-cut legitimate reduplications like 常常.
 
     /// Heuristic fallback (`--cut-heuristic`): mark consecutive duplicate words (same normalized text)
     /// except the LAST in each run, plus any word in `defaultFillers`.

@@ -105,7 +105,7 @@ final class PipelineViewModel {
     var apiKey: String = ProcessInfo.processInfo.environment["GEMINI_API_KEY"] ?? ""
     var glossaryText: String = ""
     var skipRetranscribe = false
-    var cutDetector: CutStutters.Detector = .llm
+    var cutDetector: CutStutters.Detector = .marks
     var aggressiveness: CutAggressiveness = .balanced
     var language = "Traditional Chinese"
     /// GUI defaults to PRO: the 財經節目E 0:17 case showed flash-tier ears miss marginal fast speech that pro
@@ -455,8 +455,9 @@ final class PipelineViewModel {
 
         // [6] Cut stutters (per clip; WordCutPlanner runs within this clip's own frame span)
         clip.mark(6, .running)
+        let marks = corr.corrected ? CutStutters.indicesFromMarks(result: working) : nil
         clip.cut = await CutStutters.plan(words: working.words, fps: clip.fps,
-                                          aggressiveness: aggressiveness, detector: cutDetector, url: clip.url, model: model)
+                                          aggressiveness: aggressiveness, detector: cutDetector, url: clip.url, marks: marks)
         clip.mark(6, .done)
 
         // [7] Timing-preservation check
@@ -524,7 +525,9 @@ final class PipelineViewModel {
                         await MainActor.run { clip.mark(6, .running) }
                         let words = await MainActor.run { clip.afterRetranscribe?.words ?? [] }
                         let fps = await MainActor.run { clip.fps }
-                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector, model: self.model)
+                        let result = await MainActor.run { clip.afterRetranscribe }
+                        let marks = result.map { CutStutters.indicesFromMarks(result: $0) }
+                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector, marks: marks)
                         await MainActor.run { clip.cut = r; clip.mark(6, .done) }
                     }
                 }

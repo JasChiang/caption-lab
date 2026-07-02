@@ -15,7 +15,8 @@ enum CLIRunner {
       --denoise                Enable pre-ASR light denoise (high-pass + gentle gate; default: off).
       --ab-conditioning        Run ASR twice (conditioning ON vs OFF) and print both transcripts to compare.
       --no-retranscribe        Skip stage 5 (Gemini-audio re-transcription of suspect spans).
-      --cut-heuristic          Use the heuristic stutter/filler detector instead of the LLM (stage 6).
+      --cut-heuristic          Use the heuristic stutter/filler detector instead of the corrector's ⟨⟩
+                               disfluency marks (stage 6; marks come free with stage 4 — no extra call).
       --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap; default balanced).
       --model <gemini-model>   Gemini model for content map + text correction (default gemini-flash-latest).
       --dump-json <dir>        Write per-stage JSON.
@@ -141,7 +142,7 @@ enum CLIRunner {
         }
 
         print("CaptionLab (CLI) — \(mediaURL.lastPathComponent)")
-        print("model=\(model)  retranscribe=\(doRetranscribe)  cut=\(useHeuristic ? "heuristic" : "llm")  aggressiveness=\(aggressiveness.rawValue)")
+        print("model=\(model)  retranscribe=\(doRetranscribe)  cut=\(useHeuristic ? "heuristic" : "marks")  aggressiveness=\(aggressiveness.rawValue)")
         print("conditioning: normalize=\(conditioning.normalize)  slow-fast=\(conditioning.slowFastSpeech)  denoise=\(conditioning.denoise)")
 
         // fps for stage 6
@@ -242,10 +243,11 @@ enum CLIRunner {
 
         // [6] Cut stutters / disfluencies
         header(6, "CUT STUTTERS / DISFLUENCIES (WordCutPlanner)")
+        let cutMarks = corr.corrected ? CutStutters.indicesFromMarks(result: working) : nil
         let cut = await CutStutters.plan(words: working.words, fps: fps,
-                                         aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .llm,
-                                         url: mediaURL, model: model)
-        if cut.llmFellBack { print("(LLM cut detector failed — fell back to heuristic.)") }
+                                         aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .marks,
+                                         url: mediaURL, marks: cutMarks)
+        if cut.fellBack { print("(No corrector ⟨⟩ marks available — fell back to heuristic.)") }
         print("detector=\(cut.mode.rawValue)  fps=\(String(format: "%.3f", fps))  cut \(cut.cutWords.count) word(s) → \(String(format: "%.2f", cut.secondsSaved))s removed across \(cut.cutRangesSeconds.count) range(s)")
         for (idx, w) in zip(cut.cutIndices, cut.cutWords) {
             print("  cut #\(idx): \(w.text) [\(w.start.map { String(format: "%.2f", $0) } ?? "—")–\(w.end.map { String(format: "%.2f", $0) } ?? "—")]")

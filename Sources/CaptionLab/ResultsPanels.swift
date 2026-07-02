@@ -86,7 +86,7 @@ struct ResultsPanels: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     HStack {
                         pill("\(cut.mode.rawValue)", Theme.accent)
-                        if cut.llmFellBack { pill("LLM→heuristic fallback", Theme.cut) }
+                        if cut.fellBack { pill("marks→heuristic fallback", Theme.cut) }
                         Spacer()
                         Text(String(format: "%d word(s) · %.2fs · %d range(s)", cut.cutWords.count, cut.secondsSaved, cut.cutRangesSeconds.count))
                             .font(Theme.mono(10)).foregroundStyle(Theme.dim)
