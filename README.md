@@ -6,7 +6,7 @@ A macOS SwiftUI app **and** headless CLI for LLM-assisted caption correction —
 Apple's on-device speech recognition and Google Gemini cross-check each other to produce accurate,
 karaoke-timed, edit-ready captions for real-world (fast, mumbled, jargon-heavy, code-switching) speech.
 
-Grown out of a [PalmierPro](https://github.com/palmier-io/palmier-pro) fork: the upstream app uses Apple
+Grown out of a [Palmier Pro](https://github.com/palmier-io/palmier-pro) fork: the upstream app uses Apple
 `SpeechTranscriber` only; everything LLM-side here (content map, correction, re-listening, disfluency
 marking) is this lab's addition, developed in isolation so the pipeline can be measured, A/B-tested, and
 ported back. No external Swift package dependencies — system frameworks only (SwiftUI, AVFoundation,
@@ -94,7 +94,7 @@ Test clips are local media (never committed) referenced by neutral aliases in th
 - **Implementation**: essentially all of the code was written by **Claude Code** (Anthropic) working under
   that direction — see the co-author trailers throughout the commit history, including the bugs it wrote
   and then had to find.
-- **Apple `SpeechTranscriber` as the ASR front-end comes from [PalmierPro](https://github.com/palmier-io/palmier-pro)**
+- **Apple `SpeechTranscriber` as the ASR front-end comes from [Palmier Pro](https://github.com/palmier-io/palmier-pro)**
   (the upstream project, which uses Apple ASR only); the LLM layers were added in this lab.
 
 ### License

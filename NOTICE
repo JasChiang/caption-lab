@@ -2,13 +2,13 @@ caption-lab
 ===========
 
 This project is a standalone experiment harness that reproduces the
-caption-correction / forced-alignment pipeline of PalmierPro. It is a
-DERIVATIVE WORK of PalmierPro and is therefore licensed under the
+caption-correction / forced-alignment pipeline of Palmier Pro. It is a
+DERIVATIVE WORK of Palmier Pro and is therefore licensed under the
 GNU General Public License v3.0 (see LICENSE).
 
 Upstream / origin
 -----------------
-PalmierPro — https://github.com/palmier-io/palmier-pro (GPL-3.0)
+Palmier Pro — https://github.com/palmier-io/palmier-pro (GPL-3.0)
 The code here was extracted from a private BYOK fork of that project.
 
 Provenance of the extracted sources
@@ -28,7 +28,7 @@ Files added in the fork (not present upstream), extracted here:
   - Sources/CaptionLab/CutStutters.swift         (disfluency/stutter cut; defaultFillers from EditorViewModel+AutoCut)
   - the ForcedAligner text-alignment logic
 
-Additions original to caption-lab (not from PalmierPro):
+Additions original to caption-lab (not from Palmier Pro):
   - The SwiftUI GUI (AppEntry, ContentView, TrackViews, TimelineView, ControlsPanel,
     ResultsPanels, PipelineViewModel, Theme) — the multi-clip track, waveform timeline,
     joined AVMutableComposition playback, and A/B chip lanes.

@@ -6,7 +6,7 @@
 Gemini **互相對質**，對真實世界的語音（講太快、含糊、術語密集、中英夾雜）產出準確、卡拉OK級對時、
 可直接剪輯的字幕。
 
-源自 [PalmierPro](https://github.com/palmier-io/palmier-pro) 的 fork：上游只用 Apple
+源自 [Palmier Pro](https://github.com/palmier-io/palmier-pro) 的 fork：上游只用 Apple
 `SpeechTranscriber`；這裡所有 LLM 側的部分（content map、修正、補聽、贅詞標記）都是本實驗室加的，
 獨立開發以便量測、A/B 驗證，再回移。零外部套件依賴，只用系統框架。
 
@@ -79,7 +79,7 @@ swift run CaptionLab --cli <media> [--model gemini-pro-latest] [--dump-json out/
   分層、雙耳互相對質的路線、該做什麼與該否決什麼）——掌舵、用真實素材驗證、抓出 over-fitting。
 - **實作**：程式碼幾乎全部由 **Claude Code**（Anthropic）在上述方向下完成——見 commit 歷史中的
   co-author 署名，包括它自己寫出來再自己抓到的 bug。
-- **以 Apple `SpeechTranscriber` 作為 ASR 前端源自 [PalmierPro](https://github.com/palmier-io/palmier-pro)**
+- **以 Apple `SpeechTranscriber` 作為 ASR 前端源自 [Palmier Pro](https://github.com/palmier-io/palmier-pro)**
   （上游專案，僅使用 Apple ASR）；LLM 各層為本實驗室新增。
 
 ### 授權
