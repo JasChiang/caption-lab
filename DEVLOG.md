@@ -4,6 +4,88 @@ Running notes so work can continue on another machine. Newest session on top.
 
 ---
 
+## Session 2026-07-04 — zh-TW recognition / two-tier disfluency / offline "second ear" (all GENERAL)
+
+Branch: `claude/subtitle-recognition-improvements-frivjs` (off `main`). Authored on Linux — **UNBUILT, verify
+on the Mac** (M4 Pro / 64 GB per user). Goal from the user: improve recognition, stutter/filler cutting, and
+speaker-count detection, *especially* for Taiwan Traditional Chinese — WITHOUT over-fitting the workflow to
+one language family (explicit user pushback mid-session: a hardcoded zh-TW model "won't let this workflow
+generalise"). So every change here is a GENERAL mechanism; the zh-TW specifics are examples or scoped knobs.
+
+### 1. Two-tier disfluency marking (口吃 / 贅詞) — general mechanism, TW fillers as examples
+- The corrector's ONE judgment pass now emits **two** cut tiers instead of one (`TranscriptCorrector` system
+  prompt): **⟨ ⟩ tier-1** = always-removable junk (stutter repeats, false starts, hesitation 嗯/呃/啊/um/uh),
+  and **⟪ ⟫ tier-2** = STYLISTIC discourse-marker padding — a word used as a verbal tic, not for its literal
+  meaning. TW examples in the prompt (那個/這個 as a stall, 就是/就是說 as padding, 然後 as a run-on tic, 對/對啊
+  as a filler beat, 欸/齁/蛤) with matched NEGATIVE examples (然後我們就走了 = real sequence, kept) so the LLM
+  generalises rather than pattern-matches a word list. The tier concept is language-agnostic (prompt also names
+  English "like/you know/I mean").
+- New `TranscriptionSegment.stylisticCutUnits` (Codable, defaults `[]` → old dumps still decode). Parsed by
+  new `extractStylisticMarks` (⟪⟫ = U+27EA/U+27EB, same index space as ⟨⟩ — verified the code points in the
+  prompt match the parser). `CutStutters.indicesFromMarks(result:includeStylistic:)` folds tier-2 in ONLY when
+  the caller asks. **Aggressiveness now gates the tier**: tight/balanced cut tier-1 only; **loose ALSO cuts
+  tier-2** — so a conservative edit never removes a 那個/就是 that might be doing real work. Wired in CLIRunner,
+  PipelineViewModel (run + rerunCut), and the manual editor shifts/drops ⟪⟫ marks exactly like ⟨⟩.
+- Design note: this deliberately did NOT expand the `defaultFillers` HEURISTIC list (那個/就是/然後 are too
+  often meaningful for a context-free list — the same reason 啊/唉 were excluded). The judgment happens in the
+  sentence-level LLM pass where context exists; the heuristic stays the minimal offline fallback.
+
+### 2. Offline local-ASR "second ear" (recognition) — model is a KNOB, not a hardcode
+- This is the reframed answer to the over-fitting concern. Instead of bolting in a Taiwan-tuned ASR model, the
+  stage-5 re-listen (retranscribe suspect spans) gained a pluggable backend: `RefineBackend { gemini,
+  localASR }`. `.gemini` is the untouched cloud default; `.localASR` runs a **general** offline Whisper via a
+  new sidecar (`asr/local_asr.py`, `LocalASR.swift`) that mirrors the Qwen sidecar plumbing (shared `.venv`,
+  serial subprocess). The stage's map-agreement gate + energy-peak re-timing are IDENTICAL either way — only
+  the listener swaps.
+- **The model is chosen by `$CAPTIONLAB_ASR_MODEL`**, defaulting to `mlx-community/whisper-large-v3-mlx`
+  (general multilingual, works out of the box). A Taiwan user can point it at a locale-tuned checkpoint (e.g.
+  an MLX-converted Breeze-ASR-25 for TW Mandarin + code-switching) — opt-in, no pipeline dependency on any
+  language. Offline = free, so it's also a no-API path for the whole re-listen stage.
+- Wiring: CLI `--refine-local` (+ availability print + Gemini fallback if not set up); GUI segmented picker
+  "Re-listen backend" in ControlsPanel + `vm.refineBackend`; `setup.sh --asr` installs mlx-whisper (Qwen path
+  unchanged; `--all` does both). ffmpeg note added (mlx-whisper decodes via ffmpeg).
+
+### 3. Taiwanese Hokkien (台語) + speaker-count (recognition / 說話人數) — scoped prompt notes
+- `TranscriptCorrector`: a `taiwaneseRule` telling the corrector to render clearly-Hokkien spans in standard
+  Han characters (敢有/按呢/逐家…) instead of forcing Mandarin homophones, and to keep raw chars rather than
+  invent a homophone when unsure. **Gated to zh/unknown audio** (`result.language`) so a non-Chinese clip
+  never sees it — same "general corrector + scoped note" shape as codeSwitchRule.
+- `MediaDescriber` content-map prompt: same Hokkien rule for `<dialogue>` (the map is the reference correction
+  leans on), and a hardened `<speaker>` rule — one label per DISTINCT voice, never merge/split, label
+  off-screen/voice-over speakers — so the distinct-speaker COUNT can be read straight off the map. CLI now
+  prints "Speakers detected (N): …".
+
+### Files touched
+Models.swift, TranscriptCorrector.swift, CutStutters.swift, CaptionPipeline.swift, CLIRunner.swift,
+PipelineViewModel.swift, ControlsPanel.swift, CaptionEditor.swift, MediaDescriber.swift; new LocalASR.swift +
+asr/local_asr.py; setup.sh. No new Swift package deps.
+
+### Verify on the Mac (checklist)
+1. `swift build` (green?) — new field + two-tier parse + LocalASR are pure Swift; watch the memberwise-init
+   call sites (all pass labels).
+2. Two-tier cut: run a disfluent TW clip at `--aggressiveness balanced` vs `loose`. Balanced should cut only
+   stutters/fillers; loose should ADDITIONALLY drop padding 那個/就是/然後 — and the CLI "stylistic padding
+   (⟪⟫)" line should report the count and whether it was cut. Confirm a REAL 然後/那個 (然後我們就走了) is NOT
+   marked ⟪⟫.
+3. 台語 clip (財經節目E had a 台語 idiom): check a Hokkien span comes out in Han characters, not Mandarin mush.
+4. `./setup.sh --asr`, then `--refine-local` on a garbled clip: confirm the offline sidecar re-transcribes a
+   suspect span and the map-agreement gate still guards acceptance. Try `CAPTIONLAB_ASR_MODEL=…` override.
+   (Breeze-ASR-25 needs MLX-format weights — the default whisper-large-v3-mlx is the out-of-box control.)
+5. Speaker count: multi-speaker interview (受訪者A) → "Speakers detected (2)"; confirm no split/merge.
+
+### Deferred (documented, NOT started — the honest next tranche)
+- **contextualStrings wiring (ASR gap #1)**: DEVLOG session (g) confirmed the symbols exist via SDK grep, but
+  the exact `AnalysisContext` / `setContext` shape is unverified and a wrong guess would wedge the WHOLE build
+  — left for the Mac where the compiler checks it interactively. Plumb the harvested glossary into
+  `Transcription.transcribe` then set it on the analyzer.
+- **Acoustic speaker diarization**: today speakers are labels-only from Gemini; no acoustic verification. Next
+  isolated sidecar (same shape as Qwen/LocalASR): sherpa-onnx diarization → cross-check the map's labels
+  (acoustic gives turn times + count, Gemini gives identity) and feed authoritative speaker-change ¦ breaks.
+- **Eval harness** (`--score`: CER/MER, cut precision-recall, DER) so each of the above becomes a number, not
+  a vibe.
+
+---
+
 ## Session 2026-07-02 (i) — ONE semantic pass: cut decisions fold into the corrector (de-overfit)
 
 User pushback (correct): the 常常 reduplication whitelist was whack-a-mole, and stage 6's LLM was the only

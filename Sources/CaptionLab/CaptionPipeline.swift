@@ -40,9 +40,14 @@ enum CaptionPipeline {
         result res: TranscriptionResult, url: URL, contentSegments mapSegs: [ContentSegment],
         spanCache retranscribeSpanCache: inout [String: String],
         conditioning: AudioConditioning = AudioConditioning(),
-        model: String = GeminiClient.defaultModel
+        model: String = GeminiClient.defaultModel,
+        refiner: RefineBackend = .gemini
     ) async -> (result: TranscriptionResult, retranscribes: [Retranscribe]) {
         var captionRetranscribes: [Retranscribe] = []
+        // The suspect-span DETECTION still needs the content map + a Gemini key (the map is the reference the
+        // whole stage is gated on). The re-LISTEN, though, can be offline: honor `.localASR` only when the
+        // sidecar is actually set up, else fall back to the cloud path so the stage still runs.
+        let useLocalASR = (refiner == .localASR) && LocalASR.isAvailable()
         guard hasGeminiKey else { return (res, captionRetranscribes) }
         let ref = url.path
         guard !mapSegs.isEmpty, !res.segments.isEmpty else { return (res, captionRetranscribes) }
@@ -64,6 +69,13 @@ enum CaptionPipeline {
             let clean: String
             if let cached = retranscribeSpanCache[spanKey] {
                 clean = cached
+            } else if useLocalASR {
+                // OFFLINE re-listen: the local Whisper sidecar exports + transcribes the span itself (no m4a
+                // upload, no API cost). Same verbatim contract; timing is still assigned on energy peaks below.
+                guard let verbatim = try? await LocalASR.transcribeSpan(
+                    url: url, start: s.seg.start, end: s.seg.end, language: res.language, biasHint: s.hint) else { continue }
+                clean = verbatim.trimmingCharacters(in: .whitespacesAndNewlines)
+                retranscribeSpanCache[spanKey] = clean
             } else {
                 guard let span = await extractSpanM4A(from: url, start: s.seg.start, end: s.seg.end) else { continue }
                 // Condition the suspect span before re-transcribing: normalize (quiet audio) and force a

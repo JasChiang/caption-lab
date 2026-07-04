@@ -22,6 +22,11 @@ struct TranscriptionSegment: Sendable, Codable {
     /// list can never disagree with the caption. The words stay in the text (count-lock intact); stage 6
     /// removes them from the AUDIO mechanically.
     var cutUnits: [Int] = []
+    /// Tier-2 (⟪⟫) STYLISTIC disfluencies: Taiwanese-Mandarin discourse fillers (那個/就是/然後 used as
+    /// verbal padding, not as a real demonstrative/connective) that are cuttable for a tighter edit but
+    /// natural to keep. Only the `loose` aggressiveness cuts these; tight/balanced leave them in. Kept
+    /// separate from `cutUnits` so a conservative edit never removes a word that might be meaningful.
+    var stylisticCutUnits: [Int] = []
 }
 
 struct TranscriptionResult: Sendable, Codable {
@@ -50,7 +55,8 @@ struct TranscriptionResult: Sendable, Codable {
             },
             segments: segments.map {
                 TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset,
-                                     captionBreaks: $0.captionBreaks, cutUnits: $0.cutUnits)
+                                     captionBreaks: $0.captionBreaks, cutUnits: $0.cutUnits,
+                                     stylisticCutUnits: $0.stylisticCutUnits)
             },
             atomicTerms: atomicTerms,
             conditionReport: conditionReport

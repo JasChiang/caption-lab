@@ -21,10 +21,16 @@ enum MediaDescriber {
         or summarize several sentences into one line.
         • <dialogue> is a VERBATIM transcription of what is said in this block — EVERY word exactly as spoken, \
         including fillers (呃/um) and stutters, in the ORIGINAL language. Replicate mixed-language speech \
-        exactly (e.g. "這個 feature 很酷"). DO NOT translate, summarize, paraphrase, or clean it up. Use - only \
+        exactly (e.g. "這個 feature 很酷"). If a speaker uses Taiwanese Hokkien (台語), transcribe it in the \
+        standard/common Han characters for those Hokkien words (e.g. 敢有, 按呢, 逐家), NOT the nearest \
+        Mandarin-sounding characters. DO NOT translate, summarize, paraphrase, or clean it up. Use - only \
         when truly no one is speaking.
-        • <speaker> is a SHORT, CONSISTENT label for each person across the WHOLE video (e.g. 主持人, 來賓, 旁白, \
-        or their name if stated); reuse the exact same label every time that person speaks; use - if no speech.
+        • <speaker> is a SHORT, CONSISTENT label identifying WHO is speaking — the person's name if stated, \
+        else a stable role label (主持人, 來賓, 旁白, 記者). Give each DISTINCT voice its OWN label and reuse \
+        that exact label every time that person speaks; never merge two people under one label, never split \
+        one person across two labels, and DO label an off-screen / voice-over speaker even when no one is \
+        visible. Use - only when there is genuinely no speech. (Clean, consistent labels let the number of \
+        distinct speakers be read straight off the map.)
         • <visual> is a brief note on what is on screen in \(language) (subjects, action, setting), or - if it \
         is unchanged from the previous block.
         Transcribe the WHOLE video with no gaps. Do NOT include non-speech events like [笑聲]/[Laughter]. \

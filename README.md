@@ -39,8 +39,8 @@ caption text and the cut list can never disagree.
 | 2 | ASR with pre-conditioning (normalize/compress; experimental slow-down for fast speech) | Apple, on-device |
 | 3 | Glossary — map-harvested terms merged with a manual list (no extra call) | — |
 | 4 | Correction — the one judgment pass (text + punctuation + ¦ + ⟦⟧ + ⟨⟩), count-locked to preserve timing | Gemini (text) |
-| 5 | Re-listen suspect spans where correction still disagrees with the map; splice + energy-peak re-timing | Gemini (audio, opt-in) |
-| 6 | Cut disfluencies — executes the ⟨⟩ marks mechanically; heuristic fallback offline | — |
+| 5 | Re-listen suspect spans where correction still disagrees with the map; splice + energy-peak re-timing | Gemini (audio) **or** local ASR (offline), opt-in |
+| 6 | Cut disfluencies — executes the ⟨⟩/⟪⟫ marks mechanically (tier-1 always; loose also cuts tier-2 stylistic padding); heuristic fallback offline | — |
 | 7 | Timing self-check — verifies 1:1 word-timing preservation (drift must be 0) | — |
 
 ### Features

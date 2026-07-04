@@ -24,6 +24,19 @@ struct ControlsPanel: View {
             Toggle("Skip retranscribe (stage 5)", isOn: $vm.skipRetranscribe)
                 .font(Theme.ui(12)).foregroundStyle(Theme.text).tint(Theme.accent)
 
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                fieldLabel("Re-listen backend (stage 5)")
+                Picker("", selection: $vm.refineBackend) {
+                    ForEach(RefineBackend.allCases, id: \.self) { b in Text(b.label).tag(b) }
+                }.pickerStyle(.segmented).labelsHidden().disabled(vm.skipRetranscribe)
+                if vm.refineBackend == .localASR {
+                    Text(vm.localASRAvailable
+                        ? "Offline local Whisper re-hears garbled spans — no API cost. Model via $CAPTIONLAB_ASR_MODEL (general multilingual by default)."
+                        : "Local ASR unavailable — run ./setup.sh --asr (creates .venv + installs mlx-whisper). Falls back to Gemini until then.")
+                        .font(Theme.ui(10)).foregroundStyle(vm.localASRAvailable ? Theme.faint : Theme.cut)
+                }
+            }
+
             Divider().overlay(Theme.stroke)
             sectionTitle("AUDIO CONDITIONING (pre-ASR)")
 
@@ -54,6 +67,12 @@ struct ControlsPanel: View {
                         Text("\(a.rawValue) · \(Int(a.keptGapMs))ms").tag(a)
                     }
                 }.pickerStyle(.segmented).labelsHidden()
+                if vm.cutDetector == .marks {
+                    Text(vm.aggressiveness == .loose
+                        ? "loose ALSO cuts tier-2 ⟪⟫ stylistic padding (那個/就是/然後 used as verbal tics)."
+                        : "tight/balanced cut only tier-1 ⟨⟩ (stutters, false starts, fillers); loose adds ⟪⟫ padding.")
+                        .font(Theme.ui(10)).foregroundStyle(Theme.faint)
+                }
             }
 
             Divider().overlay(Theme.stroke)

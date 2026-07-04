@@ -19,14 +19,20 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build
   xcodebuild -downloadComponent MetalToolchain
   ```
 
-## Enable the Qwen (MLX) aligner backend
+## Enable the optional Python sidecar backends
 ```bash
-./setup.sh
+./setup.sh          # Qwen (MLX) forced-aligner A/B lane  → installs mlx-audio (default)
+./setup.sh --asr    # local offline ASR "second ear"      → installs mlx-whisper
+./setup.sh --all    # both
 ```
-Creates `.venv` and installs `mlx-audio` (MLX only, no torch). The Qwen model
-`mlx-community/Qwen3-ForcedAligner-0.6B-8bit` auto-downloads on the first alignment run (needs network
-once; ~hundreds of MB; ~2.2 GB peak RAM per run — the app serializes aligner runs). Without this the app
-still builds and the Apple-ASR path works; the Qwen backend shows a "run ./setup.sh" hint.
+Creates `.venv` (MLX only, no torch). The Qwen model `mlx-community/Qwen3-ForcedAligner-0.6B-8bit` and the
+default local-ASR model `mlx-community/whisper-large-v3-mlx` auto-download on first use (needs network once;
+the app serializes each sidecar's runs). Without these the app still builds and the Apple-ASR + Gemini path
+works; each backend shows a "run ./setup.sh" hint when missing.
+- **Local ASR is a general knob, not a language lock-in**: it's the optional *offline* re-listen backend for
+  stage 5, and the model is chosen by `$CAPTIONLAB_ASR_MODEL` (default a general multilingual Whisper). Point
+  it at a locale-tuned checkpoint (e.g. an MLX Breeze-ASR-25 for Taiwan Mandarin) only if you want that.
+  Needs `ffmpeg` (mlx-whisper decodes via it): `brew install ffmpeg`.
 
 ## Run
 ```bash

@@ -120,8 +120,15 @@ extension PipelineViewModel {
             if u >= chunk.unitHi { return u + delta }
             return nil
         }
+        // Tier-2 ⟪⟫ stylistic marks shift/drop identically — a rewritten span invalidates its old positions.
+        let stylisticCutUnits: [Int] = seg.stylisticCutUnits.compactMap { u in
+            if u < chunk.unitLo { return u }
+            if u >= chunk.unitHi { return u + delta }
+            return nil
+        }
         segs[chunk.segIndex] = TranscriptionSegment(text: newSegText, start: seg.start, end: seg.end,
-                                                    captionBreaks: breaks, cutUnits: cutUnits)
+                                                    captionBreaks: breaks, cutUnits: cutUnits,
+                                                    stylisticCutUnits: stylisticCutUnits)
 
         // Re-propagate text onto word timings: unchanged text keeps its timing (LCS), changed runs re-time
         // on syllable energy peaks within their span.
@@ -145,7 +152,8 @@ extension PipelineViewModel {
             var breaks = seg.captionBreaks.filter { $0 != a.unitHi }
             if breaks.filter({ $0 > 0 && $0 < total }).isEmpty { breaks = [total] }   // sentinel (see above)
             segs[a.segIndex] = TranscriptionSegment(text: seg.text, start: seg.start, end: seg.end,
-                                                    captionBreaks: breaks, cutUnits: seg.cutUnits)
+                                                    captionBreaks: breaks, cutUnits: seg.cutUnits,
+                                                    stylisticCutUnits: seg.stylisticCutUnits)
         } else {
             guard b.segIndex == a.segIndex + 1 else { return }
             let s1 = segs[a.segIndex], s2 = segs[b.segIndex]
@@ -156,9 +164,11 @@ extension PipelineViewModel {
                 + s2.captionBreaks.map { $0 + c1 }.filter { $0 > c1 && $0 < total }
             if breaks.isEmpty { breaks = [total] }
             let cutUnits = s1.cutUnits.filter { $0 < c1 } + s2.cutUnits.map { $0 + c1 }
+            let stylistic = s1.stylisticCutUnits.filter { $0 < c1 } + s2.stylisticCutUnits.map { $0 + c1 }
             segs[a.segIndex] = TranscriptionSegment(text: CaptionBuilder.joinUnits([s1.text, s2.text]),
                                                     start: s1.start, end: s2.end,
-                                                    captionBreaks: breaks.sorted(), cutUnits: cutUnits)
+                                                    captionBreaks: breaks.sorted(), cutUnits: cutUnits,
+                                                    stylisticCutUnits: stylistic)
             segs.remove(at: b.segIndex)
         }
         commit(segs, words: result.words, from: result, to: clip)

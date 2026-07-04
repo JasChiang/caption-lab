@@ -105,6 +105,10 @@ final class PipelineViewModel {
     var apiKey: String = ProcessInfo.processInfo.environment["GEMINI_API_KEY"] ?? ""
     var glossaryText: String = ""
     var skipRetranscribe = false
+    /// Stage-5 re-listen backend: Gemini cloud (default) or the offline local ASR sidecar. General knob —
+    /// the local model is chosen by $CAPTIONLAB_ASR_MODEL, not bound to any language.
+    var refineBackend: RefineBackend = .gemini
+    var localASRAvailable: Bool { LocalASR.isAvailable() }
     var cutDetector: CutStutters.Detector = .marks
     var aggressiveness: CutAggressiveness = .balanced
     var language = "Traditional Chinese"
@@ -447,7 +451,7 @@ final class PipelineViewModel {
             var cache: [String: String] = [:]
             let r = await CaptionPipeline.retranscribeSuspectSpans(
                 result: corr.result, url: clip.url, contentSegments: clip.contentSegments, spanCache: &cache,
-                conditioning: conditioning, model: model)
+                conditioning: conditioning, model: model, refiner: refineBackend)
             working = r.result
             clip.retranscribeRows = r.retranscribes.map { RetranscribeRow(t: $0.t, from: $0.from, to: $0.to) }
             clip.mark(5, .done)
@@ -456,7 +460,7 @@ final class PipelineViewModel {
 
         // [6] Cut stutters (per clip; WordCutPlanner runs within this clip's own frame span)
         clip.mark(6, .running)
-        let marks = corr.corrected ? CutStutters.indicesFromMarks(result: working) : nil
+        let marks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: aggressiveness == .loose) : nil
         clip.cut = await CutStutters.plan(words: working.words, fps: clip.fps,
                                           aggressiveness: aggressiveness, detector: cutDetector, url: clip.url, marks: marks)
         clip.mark(6, .done)
@@ -527,7 +531,7 @@ final class PipelineViewModel {
                         let words = await MainActor.run { clip.afterRetranscribe?.words ?? [] }
                         let fps = await MainActor.run { clip.fps }
                         let result = await MainActor.run { clip.afterRetranscribe }
-                        let marks = result.map { CutStutters.indicesFromMarks(result: $0) }
+                        let marks = result.map { CutStutters.indicesFromMarks(result: $0, includeStylistic: self.aggressiveness == .loose) }
                         let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector, marks: marks)
                         await MainActor.run { clip.cut = r; clip.mark(6, .done) }
                     }

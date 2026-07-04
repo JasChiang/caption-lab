@@ -76,12 +76,28 @@ enum TranscriptCorrector {
         recognizer emits English as a single, often-corrupted token), but only when you're confident of the \
         word — never invent English that wasn't said.
         """
+        // Taiwanese Hokkien (台語) surfaces mid-sentence in a lot of Taiwan speech; the single-locale zh-TW
+        // recognizer maps it onto whatever Mandarin characters sound closest, producing gibberish. Tell the
+        // corrector to render a clearly-Hokkien span in standard Han characters rather than force Mandarin
+        // homophones onto it — and to leave the raw characters alone rather than invent a homophone when unsure.
+        // Gated to Chinese (or unknown) audio so it's dead weight for, say, a French clip: this is a
+        // language-specific NOTE layered on the general corrector, exactly like codeSwitchRule — the mechanism
+        // stays general, only the note is scoped.
+        let lang = (result.language ?? "").lowercased()
+        let isChineseish = lang.isEmpty || lang.hasPrefix("zh") || lang.hasPrefix("yue")
+        let taiwaneseRule = !isChineseish ? "" : """
+         Some speakers slip into Taiwanese Hokkien (台語) mid-sentence. When a span is clearly Hokkien, write \
+        it with the standard/common Han characters for those Hokkien words (e.g. 敢有, 按呢, 逐家, 毋通, 傷 \
+        for "too/very") instead of forcing same-sounding MANDARIN characters onto it. If you cannot render a \
+        Hokkien word in Han characters with confidence, keep the recognizer's characters unchanged rather than \
+        substituting a Mandarin homophone that looks plausible but is wrong.
+        """
         let system = """
         You clean up raw speech-to-text transcripts. For each numbered line, fix whatever the \
         recognizer got wrong, using context: characters or words it misheard — including \
         same-sounding (homophone / soundalike) substitutions in ANY language, which are especially common \
         in Chinese (e.g. 試用→使用, 帳號 not 賬號; English their/there) — plus misspellings, wrong word \
-        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(codeSwitchRule)\(glossaryRule)\(referenceRule) Add natural punctuation, \
+        boundaries, and brand / product / technical names (e.g. macOS, iPhone, AirDrop).\(codeSwitchRule)\(taiwaneseRule)\(glossaryRule)\(referenceRule) Add natural punctuation, \
         using the language's OWN quotation marks (Chinese / Japanese 「…」 with 『…』 nested; never ASCII ' or "), \
         so a caption never strands a stray quote. Do NOT \
         paraphrase, rewrite, translate, summarize, reorder, or change the speaker's wording or meaning \
@@ -89,12 +105,20 @@ enum TranscriptCorrector {
         CRITICAL: KEEP every repeated word, stutter, and false start EXACTLY as transcribed — 去去去去 stays \
         去去去去, 進進 stays 進進, "the the" stays "the the". These are NOT recognition errors; a SEPARATE edit \
         pass removes them from the audio, so the caption must still contain them or it won't match what's \
-        spoken. Never collapse a stutter (去去去去進進行 must NOT become 進行). ALSO wrap each REMOVABLE \
-        DISFLUENCY you kept in ⟨ ⟩ so the editor can cut those words from the AUDIO: the redundant repeats of \
-        a stutter run (keep the final clean instance unwrapped — 去去去去進行 becomes ⟨去去去⟩去進行), an \
-        abandoned false start, and pure fillers (嗯, 呃, um, uh). Wrap ONLY what can be deleted without \
-        changing meaning: a reduplicated word that is a real word, deliberate emphasis, or any word the \
-        sentence needs must NOT be wrapped. ⟨ ⟩ never changes the characters inside. Keep the ORIGINAL \
+        spoken. Never collapse a stutter (去去去去進進行 must NOT become 進行). ALSO mark each REMOVABLE \
+        DISFLUENCY you kept, in TWO tiers, so the editor can cut at two strengths without a second model pass. \
+        TIER 1 ⟨ ⟩ — ALWAYS-removable junk that carries no meaning and is cut even on the lightest edit: the \
+        redundant repeats of a stutter run (keep the final clean instance unwrapped — 去去去去進行 becomes \
+        ⟨去去去⟩去進行), an abandoned false start, and pure hesitation fillers (嗯, 呃, 啊 spoken as hesitation, \
+        um, uh, er). TIER 2 ⟪ ⟫ — STYLISTIC padding: a discourse-marker word spoken as a verbal tic rather \
+        than for its literal meaning, removable for a tighter edit but natural to keep. In Taiwanese Mandarin \
+        these are 那個/這個 used to stall (not pointing at a thing), 就是/就是說 as padding (not "namely"), \
+        然後 as a run-on tic (not a real "and then"), 對/對啊 as a filler beat, 欸/齁/蛤 as interjections, \
+        這樣子 trailing off; other languages have their own (English "like", "you know", "I mean"). Wrap a word \
+        in ⟪ ⟫ ONLY where it is padding. Where the SAME word does real work — 然後我們就走了 (a real sequence), \
+        那個紅色的 (a real demonstrative), 就是這個答案 ("namely"), 對，沒錯 (a genuine yes) — leave it \
+        UNWRAPPED. Neither ⟨ ⟩ nor ⟪ ⟫ changes the characters inside; a word the sentence needs, a reduplicated \
+        real word, or deliberate emphasis stays unwrapped in BOTH tiers. Keep the ORIGINAL \
         language. Also wrap any multi-character TERM that must never be split across two caption lines — a \
         technical term, proper noun, or fixed compound phrase (e.g. ⟦退化性關節炎⟧, ⟦iPhone⟧) — in ⟦ ⟧. \
         Wrap only genuine terms, never ordinary word sequences, and never change the characters inside. \
@@ -134,19 +158,25 @@ enum TranscriptCorrector {
         var atomicTerms: Set<String> = []
         var segBreaks: [[Int]] = []
         var segCuts: [[Int]] = []
+        var segStyl: [[Int]] = []
         let corrected = marked.map { line -> String in
             atomicTerms.formUnion(Self.extractTerms(line))
             let noTerms = line.replacingOccurrences(of: "\u{27E6}", with: "").replacingOccurrences(of: "\u{27E7}", with: "")
-            let (noCuts, cuts) = extractCutMarks(noTerms)
+            // Extract the two disfluency tiers in turn — ⟨⟩ (always-removable) then ⟪⟫ (stylistic). Each
+            // extractor removes only its OWN markers; the other tier's brackets are non-alphanumeric, so they
+            // never form a caption unit and both index into the SAME clean unit sequence.
+            let (noCuts, cuts) = extractCutMarks(noTerms)          // ⟨ ⟩ — tier 1
             segCuts.append(cuts)
-            let (clean, breaks) = extractCaptionBreaks(noCuts)
+            let (noStyl, styl) = extractStylisticMarks(noCuts)     // ⟪ ⟫ — tier 2
+            segStyl.append(styl)
+            let (clean, breaks) = extractCaptionBreaks(noStyl)
             segBreaks.append(breaks)
             return clean
         }
 
         let newSegs = zip(segs, corrected).enumerated().map { i, pair in
             TranscriptionSegment(text: pair.1, start: pair.0.start, end: pair.0.end,
-                                 captionBreaks: segBreaks[i], cutUnits: segCuts[i])
+                                 captionBreaks: segBreaks[i], cutUnits: segCuts[i], stylisticCutUnits: segStyl[i])
         }
         // With the source audio we can re-time words the recognizer never emitted (a recovered HDMI 2.1 / a
         // dropped syllable) onto energy peaks, so they land on the timeline instead of only in the segment text.
@@ -189,6 +219,29 @@ enum TranscriptCorrector {
             if ch == "\u{27E8}" {
                 spanStart = CaptionBuilder.units(clean, keepPunctuation: false).count
             } else if ch == "\u{27E9}" {
+                if let s0 = spanStart {
+                    let e0 = CaptionBuilder.units(clean, keepPunctuation: false).count
+                    if e0 > s0 { cuts.formUnion(s0..<e0) }
+                }
+                spanStart = nil
+            } else {
+                clean.append(ch)
+            }
+        }
+        return (clean, cuts.sorted())
+    }
+
+    /// Pulls the ⟪ ⟫ STYLISTIC-disfluency marks (tier 2: discourse-marker padding) out of a line — same
+    /// index space and same logic as extractCutMarks, just the double-angle brackets (U+27EA / U+27EB). Kept
+    /// separate from cutUnits so only the `loose` aggressiveness removes these.
+    private static func extractStylisticMarks(_ line: String) -> (text: String, cutUnits: [Int]) {
+        var clean = ""
+        var cuts: Set<Int> = []
+        var spanStart: Int? = nil
+        for ch in line {
+            if ch == "\u{27EA}" {
+                spanStart = CaptionBuilder.units(clean, keepPunctuation: false).count
+            } else if ch == "\u{27EB}" {
                 if let s0 = spanStart {
                     let e0 = CaptionBuilder.units(clean, keepPunctuation: false).count
                     if e0 > s0 { cuts.formUnion(s0..<e0) }

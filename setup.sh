@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# Bootstraps the Qwen (MLX) forced-aligner backend for CaptionLab.
-# Creates a local .venv and installs mlx-audio (MLX only — no torch pulled on purpose).
-# Idempotent: safe to re-run. The Swift app finds .venv/bin/python + aligner/qwen_align.py
-# relative to the repo root (override with $CAPTIONLAB_PYTHON / $CAPTIONLAB_ALIGNER).
+# Bootstraps the optional Python sidecar backends for CaptionLab into a local .venv.
+#   ./setup.sh          Qwen (MLX) forced-aligner A/B lane  → installs mlx-audio (default; back-compat)
+#   ./setup.sh --asr    Local offline ASR "second ear"      → installs mlx-whisper
+#   ./setup.sh --all    both
+# All MLX only — no torch pulled on purpose. Idempotent: safe to re-run. The Swift app finds
+# .venv/bin/python + the sidecars (aligner/qwen_align.py, asr/local_asr.py) relative to the repo root
+# (override with $CAPTIONLAB_PYTHON / $CAPTIONLAB_ALIGNER / $CAPTIONLAB_ASR_SCRIPT).
 set -euo pipefail
 
 cd "$(dirname "$0")"
 VENV=".venv"
 PYVER="3.12"
 
-echo "==> CaptionLab Qwen backend setup"
+WANT_QWEN=0
+WANT_ASR=0
+case "${1:-}" in
+  --asr) WANT_ASR=1 ;;
+  --all) WANT_QWEN=1; WANT_ASR=1 ;;
+  ""|--qwen) WANT_QWEN=1 ;;
+  *) echo "Usage: ./setup.sh [--asr | --all | --qwen]" >&2; exit 1 ;;
+esac
+
+echo "==> CaptionLab sidecar setup (qwen=$WANT_QWEN asr=$WANT_ASR)"
 
 create_venv() {
   if command -v uv >/dev/null 2>&1; then
@@ -27,30 +39,48 @@ create_venv() {
   fi
 }
 
+pipinstall() {
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$VENV/bin/python" "$@"
+  else
+    "$VENV/bin/python" -m pip install "$@"
+  fi
+}
+
 [ -x "$VENV/bin/python" ] || create_venv
+command -v uv >/dev/null 2>&1 || "$VENV/bin/python" -m pip install --upgrade pip
 
-echo "==> Installing mlx-audio (MLX only; no torch)"
-if command -v uv >/dev/null 2>&1; then
-  uv pip install --python "$VENV/bin/python" mlx-audio
-else
-  "$VENV/bin/python" -m pip install --upgrade pip
-  "$VENV/bin/python" -m pip install mlx-audio
-fi
-
-echo "==> Verifying import"
-"$VENV/bin/python" - <<'PY'
+if [ "$WANT_QWEN" = 1 ]; then
+  echo "==> Installing mlx-audio (Qwen forced-aligner; MLX only, no torch)"
+  pipinstall mlx-audio
+  "$VENV/bin/python" - <<'PY'
 import mlx_audio  # noqa: F401
 print("mlx-audio import OK")
 PY
+fi
+
+if [ "$WANT_ASR" = 1 ]; then
+  echo "==> Installing mlx-whisper (local offline ASR; MLX only, no torch)"
+  pipinstall mlx-whisper
+  "$VENV/bin/python" - <<'PY'
+import mlx_whisper  # noqa: F401
+print("mlx-whisper import OK")
+PY
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "    NOTE: mlx-whisper decodes audio via ffmpeg — install it once: brew install ffmpeg"
+  fi
+fi
 
 cat <<EOF
 
-==> Done. Qwen backend ready.
+==> Done.
     - Python:  $(pwd)/$VENV/bin/python
-    - Sidecar: $(pwd)/aligner/qwen_align.py
-    - The Qwen model 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit' (~hundreds of MB, 8-bit)
-      auto-downloads on the FIRST alignment run — needs network that once, then it is cached.
-    - Peak RAM per alignment ~2.2 GB (fine on 16 GB); the app serializes aligner runs.
+$( [ "$WANT_QWEN" = 1 ] && echo "    - Qwen aligner sidecar: $(pwd)/aligner/qwen_align.py
+      Model 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit' auto-downloads on first run (~hundreds of MB)." )
+$( [ "$WANT_ASR" = 1 ] && echo "    - Local ASR sidecar:    $(pwd)/asr/local_asr.py
+      Default model 'mlx-community/whisper-large-v3-mlx' auto-downloads on first run.
+      Override with \$CAPTIONLAB_ASR_MODEL (e.g. a locale-tuned checkpoint for Taiwan Mandarin).
+      Used by stage 5 when you pick 'Local ASR (offline)' / pass --refine-local." )
 
     Next: set GEMINI_API_KEY (or use the in-GUI key field), then:
       DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift run CaptionLab

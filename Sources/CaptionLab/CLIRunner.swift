@@ -14,7 +14,10 @@ enum CLIRunner {
                                swaps errors, not reduces them; opt-in for extreme fast speech only).
       --denoise                Enable pre-ASR light denoise (high-pass + gentle gate; default: off).
       --ab-conditioning        Run ASR twice (conditioning ON vs OFF) and print both transcripts to compare.
-      --no-retranscribe        Skip stage 5 (Gemini-audio re-transcription of suspect spans).
+      --no-retranscribe        Skip stage 5 (re-transcription of suspect spans).
+      --refine-local           Re-listen to suspect spans (stage 5) with the OFFLINE local ASR sidecar
+                               instead of Gemini audio — no API cost. Needs ./setup.sh --asr (mlx-whisper);
+                               model via $CAPTIONLAB_ASR_MODEL (default a general multilingual Whisper).
       --cut-heuristic          Use the heuristic stutter/filler detector instead of the corrector's ⟨⟩
                                disfluency marks (stage 6; marks come free with stage 4 — no extra call).
       --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap; default balanced).
@@ -53,6 +56,7 @@ enum CLIRunner {
         var abConditioning = false
         var audioCheckOnly = false
         var doRetranscribe = true
+        var refiner: RefineBackend = .gemini
         var useHeuristic = false
         var aggressiveness: CutAggressiveness = .balanced
         var model = GeminiClient.defaultModel
@@ -74,6 +78,7 @@ enum CLIRunner {
             case "--ab-conditioning": abConditioning = true
             case "--audio-check": audioCheckOnly = true
             case "--no-retranscribe": doRetranscribe = false
+            case "--refine-local": refiner = .localASR
             case "--cut-heuristic": useHeuristic = true
             case "--aggressiveness": i += 1; if i < args.count, let v = CutAggressiveness(rawValue: args[i]) { aggressiveness = v }
             case "--model": i += 1; if i < args.count { model = args[i] }
@@ -168,7 +173,7 @@ enum CLIRunner {
                 if let d = seg.dialogue, !d.isEmpty { print("      \(seg.speaker.map { "[\($0)] " } ?? "")dialogue: \(d)") }
             }
             let speakers = Array(Set(r.segments.compactMap(\.speaker))).sorted()
-            if !speakers.isEmpty { print("\nSpeakers detected: \(speakers.joined(separator: ", "))") }
+            if !speakers.isEmpty { print("\nSpeakers detected (\(speakers.count)): \(speakers.joined(separator: ", "))") }
             dump(r.segments, "contentmap.json")
         } catch { print("Content map failed: \(error.localizedDescription)") }
 
@@ -234,8 +239,13 @@ enum CLIRunner {
             header(5, "RETRANSCRIBE SUSPECT SPANS (Gemini audio vs content map)")
             if contentSegments.isEmpty { print("No content map → skipped.") }
             else {
+                if refiner == .localASR {
+                    print(LocalASR.isAvailable()
+                        ? "re-listen backend: local ASR (offline) — model \(ProcessInfo.processInfo.environment["CAPTIONLAB_ASR_MODEL"] ?? "mlx-community/whisper-large-v3-mlx")"
+                        : "re-listen backend: local ASR requested but NOT set up (run ./setup.sh --asr) → falling back to Gemini.")
+                }
                 var cache: [String: String] = [:]
-                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache, conditioning: conditioning, model: model)
+                let r = await CaptionPipeline.retranscribeSuspectSpans(result: corr.result, url: mediaURL, contentSegments: contentSegments, spanCache: &cache, conditioning: conditioning, model: model, refiner: refiner)
                 working = r.result
                 if r.retranscribes.isEmpty { print("No suspect spans exceeded the threshold.") }
                 else { for rt in r.retranscribes { print("  @\(rt.t)\n    BEFORE: \(rt.from)\n    AFTER : \(rt.to)\n") } }
@@ -245,12 +255,16 @@ enum CLIRunner {
 
         // [6] Cut stutters / disfluencies
         header(6, "CUT STUTTERS / DISFLUENCIES (WordCutPlanner)")
-        let cutMarks = corr.corrected ? CutStutters.indicesFromMarks(result: working) : nil
+        let cutMarks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: aggressiveness == .loose) : nil
         let cut = await CutStutters.plan(words: working.words, fps: fps,
                                          aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .marks,
                                          url: mediaURL, marks: cutMarks)
         if cut.fellBack { print("(No corrector ⟨⟩ marks available — fell back to heuristic.)") }
         print("detector=\(cut.mode.rawValue)  fps=\(String(format: "%.3f", fps))  cut \(cut.cutWords.count) word(s) → \(String(format: "%.2f", cut.secondsSaved))s removed across \(cut.cutRangesSeconds.count) range(s)")
+        let stylTotal = working.segments.reduce(0) { $0 + $1.stylisticCutUnits.count }
+        if cut.mode == .marks, stylTotal > 0 {
+            print("stylistic padding (⟪⟫, 那個/就是/然後…): \(stylTotal) unit(s) — \(aggressiveness == .loose ? "CUT (loose)" : "kept (rerun with --aggressiveness loose to cut them)")")
+        }
         for (idx, w) in zip(cut.cutIndices, cut.cutWords) {
             print("  cut #\(idx): \(w.text) [\(w.start.map { String(format: "%.2f", $0) } ?? "—")–\(w.end.map { String(format: "%.2f", $0) } ?? "—")]")
         }
