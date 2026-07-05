@@ -38,8 +38,8 @@ enum CutStutters {
     /// Global word indices from the corrector's per-segment disfluency marks — pure bookkeeping, no model
     /// call. Positional unit↔word mapping within each segment, the same approximation captions use.
     /// `includeStylistic` folds in the tier-2 ⟪⟫ discourse-marker padding on top of the always-removable
-    /// ⟨⟩ tier — the caller turns it on only for the `loose` aggressiveness, so a light edit never removes a
-    /// 那個/就是/然後 that might be doing real work.
+    /// ⟨⟩ tier — the caller turns it on via the "cut stylistic padding" switch / --cut-padding (independent
+    /// of keep-gap aggressiveness), so a conservative edit never removes a 那個/就是/然後 doing real work.
     static func indicesFromMarks(result: TranscriptionResult, includeStylistic: Bool = false) -> [Int] {
         var out: [Int] = []
         var wi = 0

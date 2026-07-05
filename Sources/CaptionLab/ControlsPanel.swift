@@ -61,16 +61,22 @@ struct ControlsPanel: View {
                     Text("Heuristic").tag(CutStutters.Detector.heuristic)
                 }.pickerStyle(.segmented).labelsHidden()
 
-                fieldLabel("Aggressiveness (keep-gap)")
+                fieldLabel("Keep-gap (breathing room around each cut)")
                 Picker("", selection: $vm.aggressiveness) {
                     ForEach(CutAggressiveness.allCases, id: \.self) { a in
                         Text("\(a.rawValue) · \(Int(a.keptGapMs))ms").tag(a)
                     }
                 }.pickerStyle(.segmented).labelsHidden()
+                Text("Only the silence LEFT around a cut — not what gets cut. tight = snappy (\"呃我想\"→\"我想\", no pause); loose = leaves ~320ms so the join sounds natural.")
+                    .font(Theme.ui(10)).foregroundStyle(Theme.faint)
+
                 if vm.cutDetector == .marks {
-                    Text(vm.aggressiveness == .loose
-                        ? "loose ALSO cuts tier-2 ⟪⟫ stylistic padding (那個/就是/然後 used as verbal tics)."
-                        : "tight/balanced cut only tier-1 ⟨⟩ (stutters, false starts, fillers); loose adds ⟪⟫ padding.")
+                    Toggle(isOn: $vm.cutStylisticPadding) {
+                        Text("Also cut stylistic padding ⟪⟫").font(Theme.ui(11))
+                    }.toggleStyle(.switch).controlSize(.mini)
+                    Text(vm.cutStylisticPadding
+                        ? "ON: also drops tier-2 verbal tics — e.g. \"那個…就是我覺得\" → \"我覺得\". Tier-1 ⟨⟩ junk (stutters/fillers) is always cut regardless."
+                        : "OFF (safe): cuts only tier-1 ⟨⟩ junk (stutters, false starts, 嗯/呃). Keeps 那個/就是/然後 — a real \"然後我們就走了\" stays intact.")
                         .font(Theme.ui(10)).foregroundStyle(Theme.faint)
                 }
             }

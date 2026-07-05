@@ -24,8 +24,9 @@ struct TranscriptionSegment: Sendable, Codable {
     var cutUnits: [Int] = []
     /// Tier-2 (⟪⟫) STYLISTIC disfluencies: Taiwanese-Mandarin discourse fillers (那個/就是/然後 used as
     /// verbal padding, not as a real demonstrative/connective) that are cuttable for a tighter edit but
-    /// natural to keep. Only the `loose` aggressiveness cuts these; tight/balanced leave them in. Kept
-    /// separate from `cutUnits` so a conservative edit never removes a word that might be meaningful.
+    /// natural to keep. Cut ONLY when the caller opts in (`includeStylistic` / the "cut stylistic padding"
+    /// switch / CLI --cut-padding) — independent of keep-gap aggressiveness. Kept separate from `cutUnits`
+    /// so a conservative edit never removes a word that might be meaningful.
     var stylisticCutUnits: [Int] = []
 }
 

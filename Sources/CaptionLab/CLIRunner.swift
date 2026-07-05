@@ -20,7 +20,10 @@ enum CLIRunner {
                                model via $CAPTIONLAB_ASR_MODEL (default a general multilingual Whisper).
       --cut-heuristic          Use the heuristic stutter/filler detector instead of the corrector's ⟨⟩
                                disfluency marks (stage 6; marks come free with stage 4 — no extra call).
-      --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap; default balanced).
+      --aggressiveness <x>     tight | balanced | loose  (stage-6 keep-gap ONLY: 60/150/320 ms of breathing
+                               room kept around each cut; default balanced). Does NOT decide which tiers cut.
+      --cut-padding            ALSO cut tier-2 ⟪⟫ stylistic padding (那個/就是/然後 used as verbal tics), on
+                               top of the always-cut tier-1 ⟨⟩ junk. Off by default (independent of keep-gap).
       --model <gemini-model>   Gemini model for content map + text correction (default gemini-flash-latest).
       --dump-json <dir>        Write per-stage JSON.
       --asr-json <file>        Load a pre-exported TranscriptionResult instead of running live Apple ASR.
@@ -59,6 +62,7 @@ enum CLIRunner {
         var refiner: RefineBackend = .gemini
         var useHeuristic = false
         var aggressiveness: CutAggressiveness = .balanced
+        var cutStylisticPadding = false
         var model = GeminiClient.defaultModel
         var dumpDir: String?
         var asrJSONPath: String?
@@ -81,6 +85,7 @@ enum CLIRunner {
             case "--refine-local": refiner = .localASR
             case "--cut-heuristic": useHeuristic = true
             case "--aggressiveness": i += 1; if i < args.count, let v = CutAggressiveness(rawValue: args[i]) { aggressiveness = v }
+            case "--cut-padding": cutStylisticPadding = true
             case "--model": i += 1; if i < args.count { model = args[i] }
             case "--dump-json": i += 1; if i < args.count { dumpDir = args[i] }
             case "--asr-json": i += 1; if i < args.count { asrJSONPath = args[i] }
@@ -147,7 +152,7 @@ enum CLIRunner {
         }
 
         print("CaptionLab (CLI) — \(mediaURL.lastPathComponent)")
-        print("model=\(model)  retranscribe=\(doRetranscribe)  cut=\(useHeuristic ? "heuristic" : "marks")  aggressiveness=\(aggressiveness.rawValue)")
+        print("model=\(model)  retranscribe=\(doRetranscribe)  cut=\(useHeuristic ? "heuristic" : "marks")  aggressiveness=\(aggressiveness.rawValue)  cut-padding=\(cutStylisticPadding)")
         print("conditioning: normalize=\(conditioning.normalize)  slow-fast=\(conditioning.slowFastSpeech)  denoise=\(conditioning.denoise)")
 
         // fps for stage 6
@@ -255,7 +260,7 @@ enum CLIRunner {
 
         // [6] Cut stutters / disfluencies
         header(6, "CUT STUTTERS / DISFLUENCIES (WordCutPlanner)")
-        let cutMarks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: aggressiveness == .loose) : nil
+        let cutMarks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: cutStylisticPadding) : nil
         let cut = await CutStutters.plan(words: working.words, fps: fps,
                                          aggressiveness: aggressiveness, detector: useHeuristic ? .heuristic : .marks,
                                          url: mediaURL, marks: cutMarks)
@@ -263,7 +268,7 @@ enum CLIRunner {
         print("detector=\(cut.mode.rawValue)  fps=\(String(format: "%.3f", fps))  cut \(cut.cutWords.count) word(s) → \(String(format: "%.2f", cut.secondsSaved))s removed across \(cut.cutRangesSeconds.count) range(s)")
         let stylTotal = working.segments.reduce(0) { $0 + $1.stylisticCutUnits.count }
         if cut.mode == .marks, stylTotal > 0 {
-            print("stylistic padding (⟪⟫, 那個/就是/然後…): \(stylTotal) unit(s) — \(aggressiveness == .loose ? "CUT (loose)" : "kept (rerun with --aggressiveness loose to cut them)")")
+            print("stylistic padding (⟪⟫, 那個/就是/然後…): \(stylTotal) unit(s) — \(cutStylisticPadding ? "CUT (--cut-padding)" : "kept (rerun with --cut-padding to cut them)")")
         }
         for (idx, w) in zip(cut.cutIndices, cut.cutWords) {
             print("  cut #\(idx): \(w.text) [\(w.start.map { String(format: "%.2f", $0) } ?? "—")–\(w.end.map { String(format: "%.2f", $0) } ?? "—")]")

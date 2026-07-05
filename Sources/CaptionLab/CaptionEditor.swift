@@ -23,7 +23,10 @@ extension PipelineViewModel {
 
     /// Caption lines for ONE clip with their segment/unit provenance — the single source of chunking for
     /// both the on-video overlay (`rebuildCaptionCache`) and the editor panel.
-    func captionChunks(for result: TranscriptionResult) -> [CaptionChunk] {
+    /// `applyingCuts` mirrors the "joined + cuts" preview: the removed disfluency units are dropped from the
+    /// caption text AND its timing so the overlay matches the tightened audio (default off → full text, used
+    /// by the editor). `cutPadding` additionally drops tier-2 ⟪⟫ stylistic padding, matching the cut setting.
+    func captionChunks(for result: TranscriptionResult, applyingCuts: Bool = false, cutPadding: Bool = false) -> [CaptionChunk] {
         var chunks: [CaptionChunk] = []
         let words = result.words
         for (si, seg) in result.segments.enumerated() {
@@ -44,15 +47,27 @@ extension PipelineViewModel {
                     if let e0 = segWords[k - 1].end, let s1 = segWords[k].start { gaps[k] = max(0, s1 - e0) }
                 }
             }
+            // In cuts-applied mode, drop the removed disfluency positions from BOTH the displayed text and
+            // the timing words. cutUnits/stylisticCutUnits are segment word-positions, which line up with the
+            // `du` unit indices in the count-locked layout — so the same set filters units and words.
+            let cutSet: Set<Int> = applyingCuts
+                ? Set(seg.cutUnits + (cutPadding ? seg.stylisticCutUnits : []))
+                : []
             var s = 0, wi = 0
             for e in captionStops(du: du, llm: seg.captionBreaks, gaps: gaps, maxUnits: 16) {
                 guard e > s else { continue }
                 let last = (e == du.count)
                 let n = last ? (segWords.count - wi) : min(e - s, segWords.count - wi)
                 if n > 0 {
-                    let take = segWords[wi..<wi + n]; wi += n
-                    let text = du[s..<min(e, du.count)].joined().trimmingCharacters(in: .whitespaces)
-                    if let a = take.first?.start, let b = take.last?.end, !text.isEmpty {
+                    let take = Array(segWords[wi..<wi + n])
+                    // Word at chunk offset j is segment word-position wi+j; drop it when cut.
+                    let keptWords = cutSet.isEmpty ? take
+                        : take.enumerated().filter { !cutSet.contains(wi + $0.offset) }.map(\.element)
+                    let text = (s..<min(e, du.count))
+                        .filter { !cutSet.contains($0) }
+                        .map { du[$0] }.joined().trimmingCharacters(in: .whitespaces)
+                    wi += n
+                    if let a = keptWords.first?.start, let b = keptWords.last?.end, !text.isEmpty {
                         chunks.append(CaptionChunk(id: chunks.count, segIndex: si,
                                                    unitLo: s, unitHi: min(e, du.count),
                                                    start: a, end: b, text: text))

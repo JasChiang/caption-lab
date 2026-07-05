@@ -110,7 +110,13 @@ final class PipelineViewModel {
     var refineBackend: RefineBackend = .gemini
     var localASRAvailable: Bool { LocalASR.isAvailable() }
     var cutDetector: CutStutters.Detector = .marks
+    /// Keep-gap only: how much breathing room to leave around each cut (tight 60ms / balanced 150ms /
+    /// loose 320ms). No longer decides WHICH tiers are cut — that's `cutStylisticPadding` now.
     var aggressiveness: CutAggressiveness = .balanced
+    /// Independent from keep-gap: when on, stage 6 ALSO removes tier-2 ⟪⟫ stylistic discourse-marker padding
+    /// (那個/就是/然後 used as verbal tics) on top of the always-removed tier-1 ⟨⟩ junk. Off by default so a
+    /// conservative cut never drops a 那個/就是 that might be doing real work.
+    var cutStylisticPadding = false
     var language = "Traditional Chinese"
     /// GUI defaults to PRO: the 財經節目E 0:17 case showed flash-tier ears miss marginal fast speech that pro
     /// hears (and the map is the reference everything downstream leans on). CLI keeps the cheap flash
@@ -169,7 +175,9 @@ final class PipelineViewModel {
         for (idx, clip) in clips.enumerated() {
             let off = rawOffset(of: idx)
             guard let result = editableResult(for: clip) else { continue }
-            for c in captionChunks(for: result) {
+            // Match the media preview: when cuts are applied, the overlay shows the tightened text (removed
+            // disfluencies gone), re-timed by the same compToRaw map that drives the playhead.
+            for c in captionChunks(for: result, applyingCuts: previewCutsApplied, cutPadding: cutStylisticPadding) {
                 lines.append(CaptionLine(start: off + c.start, end: off + c.end, text: c.text))
             }
         }
@@ -460,7 +468,7 @@ final class PipelineViewModel {
 
         // [6] Cut stutters (per clip; WordCutPlanner runs within this clip's own frame span)
         clip.mark(6, .running)
-        let marks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: aggressiveness == .loose) : nil
+        let marks = corr.corrected ? CutStutters.indicesFromMarks(result: working, includeStylistic: cutStylisticPadding) : nil
         clip.cut = await CutStutters.plan(words: working.words, fps: clip.fps,
                                           aggressiveness: aggressiveness, detector: cutDetector, url: clip.url, marks: marks)
         clip.mark(6, .done)
@@ -524,6 +532,9 @@ final class PipelineViewModel {
         isRunning = true
         Task {
             defer { isRunning = false }
+            let aggressiveness = self.aggressiveness
+            let detector = self.cutDetector
+            let cutStylistic = self.cutStylisticPadding
             await withTaskGroup(of: Void.self) { group in
                 for clip in clips where clip.afterRetranscribe != nil {
                     group.addTask {
@@ -531,8 +542,8 @@ final class PipelineViewModel {
                         let words = await MainActor.run { clip.afterRetranscribe?.words ?? [] }
                         let fps = await MainActor.run { clip.fps }
                         let result = await MainActor.run { clip.afterRetranscribe }
-                        let marks = result.map { CutStutters.indicesFromMarks(result: $0, includeStylistic: self.aggressiveness == .loose) }
-                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: self.aggressiveness, detector: self.cutDetector, marks: marks)
+                        let marks = result.map { CutStutters.indicesFromMarks(result: $0, includeStylistic: cutStylistic) }
+                        let r = await CutStutters.plan(words: words, fps: fps, aggressiveness: aggressiveness, detector: detector, marks: marks)
                         await MainActor.run { clip.cut = r; clip.mark(6, .done) }
                     }
                 }
